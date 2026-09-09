@@ -21,9 +21,12 @@
     --rule: #BEC2B6;
     --dump: #9C4A16;
     --water: #1B4F8A;
+    --camp: #2E6B35;
+    --butcher: #A11C3A;
+    --bakery: #8A6A00;
     --flag: #7A5B00;
     --flag-bg: #F0DFA8;
-    --mine: #4A5A2A;
+    --mine: #3F4636;
   }
 
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -158,7 +161,25 @@
   }
   .tag.dump { background: var(--dump); }
   .tag.water { background: var(--water); }
+  .tag.camp { background: var(--camp); }
+  .tag.butcher { background: var(--butcher); }
+  .tag.bakery { background: var(--bakery); }
   .tag.mine { background: var(--mine); }
+
+  /* ---- category chips ---- */
+  .types { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 14px 10px; }
+  .types button {
+    flex: 1 1 28%;
+    min-height: 54px;
+    border: 2px solid var(--c);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--c);
+    font: inherit; font-weight: 700; font-size: 16px;
+    cursor: pointer;
+  }
+  .types button[aria-pressed="true"] { background: var(--c); color: #fff; }
+  .types button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 
   /* ---- location bar ---- */
   .loc {
@@ -279,7 +300,24 @@ var SAMPLE_POINTS = [
   { id:"s12", name:"Sample point — Echuca",      type:"water", lat:-36.1290, lon:144.7510, fee:"$2 coin", access:"Holiday park, gate 2",           potable:true }
 ];
 
+/* The categories the app knows about. Adding another kind of thing later —
+   LPG, rest areas — means adding a line here, a colour above, and a matching
+   entry in fetch_points.py. Nothing else needs to change. */
+var TYPES = [
+  { id: "dump",    short: "Dump",    full: "Dump point" },
+  { id: "water",   short: "Water",   full: "Water point" },
+  { id: "camp",    short: "Camp",    full: "Free camp" },
+  { id: "butcher", short: "Butcher", full: "Butcher" },
+  { id: "bakery",  short: "Bakery",  full: "Bakery" }
+];
+
+function typeInfo(id) {
+  for (var i = 0; i < TYPES.length; i++) if (TYPES[i].id === id) return TYPES[i];
+  return { id: id, short: id, full: id };
+}
+
 var BUNDLED = SAMPLE_POINTS;     // replaced by points.json if it loads
+
 var USING_SAMPLE = true;
 
 /* ============================================================
@@ -293,6 +331,25 @@ var USING_SAMPLE = true;
    ============================================================ */
 
 var STORAGE_KEY = "dumpfinder.mypoints.v1";
+var TYPES_KEY = "dumpfinder.types.v1";
+
+/* Which categories you last had switched on. Remembered so the app opens
+   the way you left it rather than resetting every time. */
+function loadTypes(fallback) {
+  try {
+    var text = localStorage.getItem(TYPES_KEY);
+    if (!text) return fallback;
+    var list = JSON.parse(text);
+    return (Array.isArray(list) && list.length) ? list : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function saveTypes(list) {
+  try { localStorage.setItem(TYPES_KEY, JSON.stringify(list)); } catch (e) {}
+}
+
 
 function loadMine() {
   try {
@@ -320,7 +377,7 @@ function isValidPoint(p) {
   return p && typeof p === "object"
     && typeof p.lat === "number" && typeof p.lon === "number"
     && p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180
-    && (p.type === "dump" || p.type === "water");
+    && TYPES.some(function (t) { return t.id === p.type; });
 }
 
 function newId() {
@@ -394,7 +451,7 @@ function formatDistance(km) {
 
 var state = {
   position: null,        // { lat, lon, source: "gps" | "manual" }
-  filter: "both",        // "dump" | "water" | "both"
+  types: ["dump", "water"],   // which categories are switched on
   mode: "list",          // "list" | "map" — how results are shown
   view: "list",          // "list" | "detail" | "add"
   selectedId: null,
@@ -413,7 +470,7 @@ function nearbyPoints() {
   var here = state.position;
 
   var visible = allPoints().filter(function (p) {
-    return state.filter === "both" || p.type === state.filter;
+    return state.types.indexOf(p.type) !== -1;
   });
 
   var measured = visible.map(function (p) {
@@ -491,13 +548,10 @@ function escapeHtml(s) {
   });
 }
 
-function typeLabel(t, short) {
-  if (t === "dump") return short ? "Dump" : "Dump point";
-  return short ? "Water" : "Water";
-}
-
 function tagsFor(p, short) {
-  var html = '<span class="tag ' + p.type + '">' + typeLabel(p.type, short) + '</span>';
+  var info = typeInfo(p.type);
+  var html = '<span class="tag ' + p.type + '">'
+           + (short ? info.short : info.full) + '</span>';
   if (p.mine) html += '<span class="tag mine">Mine</span>';
   return html;
 }
@@ -528,11 +582,13 @@ function listView() {
   var results = nearbyPoints();
   var html = flashStrip() + sourceStrip();
 
-  html += '<div class="filter">'
-    + filterButton("dump", "Dump")
-    + filterButton("water", "Water")
-    + filterButton("both", "Both")
-    + '</div>';
+  html += '<div class="types">';
+  TYPES.forEach(function (t) {
+    html += '<button data-type="' + t.id + '" style="--c: var(--' + t.id + ')" '
+      + 'aria-pressed="' + (state.types.indexOf(t.id) !== -1) + '">'
+      + t.short + '</button>';
+  });
+  html += '</div>';
 
   if (mapAvailable()) {
     html += '<div class="filter" style="padding-top:0">'
@@ -551,8 +607,10 @@ function listView() {
   }
 
   if (results.length === 0) {
-    html += '<div class="panel"><h2>Nothing in this category</h2>'
-      + '<p>Switch the filter to Both, or add a point of your own.</p></div>';
+    html += '<div class="panel"><h2>Nothing switched on</h2>'
+      + '<p>' + (state.types.length === 0
+          ? "Tap a category above to start."
+          : "Nothing of that kind in the data. Try another category.") + '</p></div>';
   } else if (state.mode === "map") {
     html += mapSection();
     html += '<div class="list">';
@@ -605,11 +663,6 @@ function listView() {
   return html + myPointsPanel();
 }
 
-function filterButton(value, label) {
-  return '<button data-filter="' + value + '" aria-pressed="'
-    + (state.filter === value) + '">' + label + '</button>';
-}
-
 function manualPanel(message) {
   return '<div class="panel">'
     + '<h2>Set your position</h2>'
@@ -650,10 +703,12 @@ function addView() {
   html += '<input id="pname" type="text" placeholder="Tap behind the shed" autocomplete="off">';
 
   html += '<label>Type</label>';
-  html += '<div class="filter" style="padding:0">'
-    + '<button data-formtype="dump" aria-pressed="' + (state.formType === "dump") + '">Dump</button>'
-    + '<button data-formtype="water" aria-pressed="' + (state.formType === "water") + '">Water</button>'
-    + '</div>';
+  html += '<div class="types" style="padding:0">';
+  TYPES.forEach(function (t) {
+    html += '<button data-formtype="' + t.id + '" style="--c: var(--' + t.id + ')" '
+      + 'aria-pressed="' + (state.formType === t.id) + '">' + t.short + '</button>';
+  });
+  html += '</div>';
 
   html += '<label for="pnote">Note</label>';
   html += '<textarea id="pnote" placeholder="Gate code 1234. Hose is short — park close."></textarea>';
@@ -706,9 +761,11 @@ function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+/* Markers take their colour from the category, the same colour the chips and
+   list tags use. Your own points keep their category colour and are picked
+   out by a dark ring instead, so a water point you saved still reads as water. */
 function pointColour(p) {
-  if (p.mine) return cssVar("--mine");
-  return cssVar(p.type === "dump" ? "--dump" : "--water");
+  return cssVar("--" + p.type) || cssVar("--ink");
 }
 
 function initMap() {
@@ -761,8 +818,8 @@ function refreshMarkers() {
   results.forEach(function (r) {
     var marker = L.circleMarker([r.point.lat, r.point.lon], {
       radius: 8,
-      color: "#fff",
-      weight: 2,
+      color: r.point.mine ? cssVar("--ink") : "#fff",
+      weight: r.point.mine ? 3 : 2,
       fillColor: pointColour(r.point),
       fillOpacity: 1
     });
@@ -852,7 +909,10 @@ function detailView() {
   html += '<dt>Distance and bearing</dt><dd class="num">' + d.value + ' ' + d.unit
        + ' &middot; ' + found.compass + ' (' + found.deg.toFixed(0) + '&deg;)</dd>';
   if (p.type === "water") html += '<dt>Drinkable</dt><dd>' + potable + '</dd>';
-  html += '<dt>Cost</dt><dd>' + escapeHtml(p.fee || "Unknown") + '</dd>';
+  if (p.hours) html += '<dt>Opening hours</dt><dd>' + escapeHtml(p.hours) + '</dd>';
+  if (p.type === "dump" || p.type === "water" || p.type === "camp") {
+    html += '<dt>Cost</dt><dd>' + escapeHtml(p.fee || "Unknown") + '</dd>';
+  }
   html += '<dt>Getting in</dt><dd>' + escapeHtml(p.access || "No notes") + '</dd>';
   if (p.verified) html += '<dt>Last verified</dt><dd class="num">' + escapeHtml(p.verified) + '</dd>';
   html += '<dt>Coordinates</dt><dd class="num">' + p.lat.toFixed(5) + ', ' + p.lon.toFixed(5) + '</dd>';
@@ -961,8 +1021,16 @@ function importFrom(text) {
    ============================================================ */
 
 function wireUp() {
-  Array.prototype.forEach.call(app.querySelectorAll("[data-filter]"), function (b) {
-    b.onclick = function () { state.filter = b.getAttribute("data-filter"); state.flash = null; render(); };
+  Array.prototype.forEach.call(app.querySelectorAll("[data-type]"), function (b) {
+    b.onclick = function () {
+      var id = b.getAttribute("data-type");
+      var at = state.types.indexOf(id);
+      // Tapping a chip that's on turns it off, and vice versa.
+      if (at === -1) state.types.push(id); else state.types.splice(at, 1);
+      saveTypes(state.types);
+      state.flash = null;
+      render();
+    };
   });
 
   Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
@@ -1153,6 +1221,8 @@ function registerServiceWorker() {
 }
 
 state.mine = loadMine();
+state.types = loadTypes(state.types);
+
 render();
 loadBundled().then(function () { render(); });
 requestGPS();

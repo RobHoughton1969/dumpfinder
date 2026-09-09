@@ -23,7 +23,7 @@
  * exactly what you don't want after an update.
  */
 
-var CACHE_NAME = "dumpfinder-v3";
+var CACHE_NAME = "dumpfinder-v4";
 
 /* The files the app cannot run without. If any one of these fails to
    download, the whole install fails and the old version stays put —
