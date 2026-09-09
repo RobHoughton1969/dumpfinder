@@ -134,15 +134,13 @@
     font-weight: 600;
     line-height: 1.35;
   }
-  .flag.ok { background: transparent; color: var(--ink-soft); font-weight: 600; }
-
-  /* ---- filter / segmented control ---- */
-  .filter {
+  /* ---- List / Map switch ---- */
+  .segmented {
     display: flex;
     gap: 2px;
-    padding: 14px 14px 12px;
+    padding: 0 14px 12px;
   }
-  .filter button {
+  .segmented button {
     flex: 1;
     min-height: 54px;
     border: 2px solid var(--ink);
@@ -153,11 +151,11 @@
     font-size: 17px;
     cursor: pointer;
   }
-  .filter button:first-child { border-radius: 6px 0 0 6px; }
-  .filter button:last-child { border-radius: 0 6px 6px 0; }
-  .filter button + button { border-left-width: 0; }
-  .filter button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
-  .filter button:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+  .segmented button:first-child { border-radius: 6px 0 0 6px; }
+  .segmented button:last-child { border-radius: 0 6px 6px 0; }
+  .segmented button + button { border-left-width: 0; }
+  .segmented button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+  .segmented button:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
 
   /* ---- hero readout ---- */
   .hero {
@@ -326,7 +324,6 @@
     font-size: 15px; font-weight: 600; line-height: 1.45;
   }
 
-
   .actions { margin: 0 14px 32px; }
   .pair { display: flex; gap: 10px; }
   .pair .btn { flex: 1; }
@@ -341,6 +338,7 @@
   .detail dl { margin: 14px 0 0; background: var(--surface); border-radius: 8px; padding: 4px 18px; }
   .detail dt { font-size: 13px; font-weight: 700; color: var(--ink-soft); padding-top: 14px; }
   .detail dd { margin: 2px 0 14px; font-size: 17px; line-height: 1.4; }
+
   /* ---- map ---- */
   .mapslot { margin: 0 14px 12px; }
   #map {
@@ -729,7 +727,6 @@ function loadBitmap(file) {
 
 /* ============================================================
    3. THE MATHS
-
    ============================================================ */
 
 var EARTH_RADIUS_KM = 6371;
@@ -764,6 +761,13 @@ function compassLabel(degrees) {
   return COMPASS[Math.round(degrees / 22.5) % 16];
 }
 
+/* Everything the list needs to know about one place, seen from where you are. */
+function measure(here, p) {
+  var km = distanceKm(here.lat, here.lon, p.lat, p.lon);
+  var deg = bearingDegrees(here.lat, here.lon, p.lat, p.lon);
+  return { point: p, km: km, deg: deg, compass: compassLabel(deg) };
+}
+
 function formatDistance(km) {
   if (km < 1)   return { value: Math.round(km * 1000), unit: "m"  };
   if (km < 10)  return { value: km.toFixed(1),         unit: "km" };
@@ -783,7 +787,6 @@ var state = {
   types: ["dump", "water"],   // which categories are switched on
   mode: "map",           // "list" | "map" — the app opens on the map
   filtersOpen: false,    // is the category picker folded out?
-  shots: [],             // photos for the point being looked at
   photoBusy: false,      // a picture is being shrunk right now
   pendingShot: null,     // a photo taken but not yet saved
   view: "list",          // "list" | "detail" | "add"
@@ -793,6 +796,8 @@ var state = {
   manualError: null,
   formError: null,
   formType: "dump",      // which type the add-a-point form has selected
+  draftName: "",         // what's been typed into the form so far, kept
+  draftNote: "",         //   across a re-render when the type chip changes
   pendingPos: null,      // the fix captured when Save this spot was tapped
   mine: [],
   flash: null            // one-line confirmation shown at the top
@@ -806,11 +811,7 @@ function nearbyPoints() {
     return state.types.indexOf(p.type) !== -1;
   });
 
-  var measured = visible.map(function (p) {
-    var km = distanceKm(here.lat, here.lon, p.lat, p.lon);
-    var deg = bearingDegrees(here.lat, here.lon, p.lat, p.lon);
-    return { point: p, km: km, deg: deg, compass: compassLabel(deg) };
-  });
+  var measured = visible.map(function (p) { return measure(here, p); });
 
   measured.sort(function (a, b) { return a.km - b.km; });
   return measured;
@@ -902,6 +903,30 @@ function render() {
   if (state.view === "list" && state.mode === "map") mountMap();
 }
 
+/* Open a place's page. Used by list rows, the hero card and map pins alike. */
+function openDetail(id) {
+  state.selectedId = id;
+  state.view = "detail";
+  state.flash = null;
+  window.scrollTo(0, 0);
+  render();
+}
+
+/* Back to the list, optionally with a one-line confirmation across the top.
+   Any photo taken but not saved is let go of here. */
+function showList(flash) {
+  if (state.pendingShot) {
+    URL.revokeObjectURL(state.pendingShot.url);
+    state.pendingShot = null;
+  }
+  state.view = "list";
+  state.selectedId = null;
+  state.formError = null;
+  state.flash = flash || null;
+  window.scrollTo(0, 0);
+  render();
+}
+
 function flashStrip() {
   if (!state.flash) return "";
   return '<div class="flag">' + escapeHtml(state.flash) + '</div>';
@@ -983,15 +1008,23 @@ function filterBlock() {
   return html;
 }
 
-function listView() {
+function rowHtml(r) {
+  var d = formatDistance(r.km);
+  return '<button class="row" data-id="' + escapeHtml(r.point.id) + '">'
+    + '<span class="d num">' + d.value + '<small> ' + d.unit + '</small></span>'
+    + '<span class="b">' + r.compass + '</span>'
+    + '<span class="n">' + escapeHtml(r.point.name) + '<br>' + tagsFor(r.point, true) + '</span>'
+    + '</button>';
+}
 
+function listView() {
   var results = nearbyPoints();
   var html = flashStrip() + sourceStrip();
 
   html += filterBlock();
 
   if (mapAvailable()) {
-    html += '<div class="filter" style="padding-top:0">'
+    html += '<div class="segmented">'
       + '<button data-mode="list" aria-pressed="' + (state.mode === "list") + '">List</button>'
       + '<button data-mode="map" aria-pressed="' + (state.mode === "map") + '">Map</button>'
       + '</div>';
@@ -1013,21 +1046,11 @@ function listView() {
           : "Nothing of that kind in the data. Try another category.") + '</p></div>';
   } else if (state.mode === "map") {
     html += mapSection();
-    html += '<div class="list">';
-    results.slice(0, 8).forEach(function (r) {
-      var rd = formatDistance(r.km);
-      html += '<button class="row" data-id="' + escapeHtml(r.point.id) + '">'
-        + '<span class="d num">' + rd.value + '<small> ' + rd.unit + '</small></span>'
-        + '<span class="b">' + r.compass + '</span>'
-        + '<span class="n">' + escapeHtml(r.point.name)
-        + '<br>' + tagsFor(r.point, true)
-        + '</span></button>';
-    });
-    html += '</div>';
+    html += '<div class="list">' + results.slice(0, 8).map(rowHtml).join("") + '</div>';
   } else {
     var first = results[0];
     var d = formatDistance(first.km);
-    html += '<button class="hero" data-id="' + first.point.id + '">'
+    html += '<button class="hero" data-id="' + escapeHtml(first.point.id) + '">'
       + '<div class="compass"><div class="needle" style="transform: rotate(' + first.deg.toFixed(0) + 'deg)"></div></div>'
       + '<div class="hero-body">'
       + '<span class="dist num">' + d.value + '<small> ' + d.unit + '</small></span>'
@@ -1037,17 +1060,7 @@ function listView() {
       + '</div></div></button>';
 
     if (results.length > 1) {
-      html += '<div class="list">';
-      results.slice(1, 15).forEach(function (r) {
-        var rd = formatDistance(r.km);
-        html += '<button class="row" data-id="' + escapeHtml(r.point.id) + '">'
-          + '<span class="d num">' + rd.value + '<small> ' + rd.unit + '</small></span>'
-          + '<span class="b">' + r.compass + '</span>'
-          + '<span class="n">' + escapeHtml(r.point.name)
-          + '<br>' + tagsFor(r.point, true)
-          + '</span></button>';
-      });
-      html += '</div>';
+      html += '<div class="list">' + results.slice(1, 15).map(rowHtml).join("") + '</div>';
     }
   }
 
@@ -1099,8 +1112,11 @@ function addView() {
   html += '<p>Recording <span class="num">' + p.lat.toFixed(5) + ', ' + p.lon.toFixed(5) + '</span>'
        + (p.source === "gps" ? " from GPS." : " as entered.") + '</p>';
 
+  // The two typed fields are drawn from state, so a re-render (say, tapping
+  // a different type chip) doesn't wipe what you've written.
   html += '<label for="pname">Name</label>';
-  html += '<input id="pname" type="text" placeholder="Tap behind the shed" autocomplete="off">';
+  html += '<input id="pname" type="text" placeholder="Tap behind the shed" autocomplete="off" '
+       + 'value="' + escapeHtml(state.draftName) + '">';
 
   html += '<label>Type</label>';
   html += '<div class="types" style="padding:0">';
@@ -1111,7 +1127,8 @@ function addView() {
   html += '</div>';
 
   html += '<label for="pnote">Note</label>';
-  html += '<textarea id="pnote" placeholder="Gate code 1234. Hose is short — park close."></textarea>';
+  html += '<textarea id="pnote" placeholder="Gate code 1234. Hose is short — park close.">'
+       + escapeHtml(state.draftNote) + '</textarea>';
 
   if (state.formError) html += '<div class="err">' + escapeHtml(state.formError) + '</div>';
 
@@ -1161,21 +1178,13 @@ function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-/* Markers take their colour from the category, the same colour the chips and
-   list tags use. Your own points keep their category colour and are picked
-   out by a dark ring instead, so a water point you saved still reads as water. */
-function pointColour(p) {
-  return cssVar("--" + p.type) || cssVar("--ink");
-}
-
 function initMap() {
   leafletMap = L.map(mapHost, {
     zoomControl: true,
     attributionControl: true,
     tap: true,
-    // Draw the dots onto one canvas rather than making a separate SVG shape
-    // for each. With several hundred on screen at once that is the difference
-    // between smooth panning and a slideshow.
+    // Vector shapes (the distance rings, the dot for you) go on one canvas
+    // rather than one SVG element each. The pins are HTML and unaffected.
     preferCanvas: true
   });
 
@@ -1224,8 +1233,8 @@ function drawRings() {
    distance from you — that never changes — but the map draws whatever is on
    screen, so scrolling across to the next town shows that town's points.
 
-   If there are more in view than we are willing to draw, the ones nearest the
-   middle of the screen win, and the count underneath says so. */
+   If there are more in view than we are willing to draw, an even sample is
+   kept — see below — and the count underneath says so. */
 function pointsInView() {
   if (!leafletMap) return { shown: [], total: 0 };
 
@@ -1293,8 +1302,6 @@ function markerIcon(p) {
 }
 
 function refreshMarkers() {
-
-
   if (!markerLayer) return;
   markerLayer.clearLayers();
 
@@ -1303,19 +1310,12 @@ function refreshMarkers() {
   view.shown.forEach(function (p) {
     var marker = L.marker([p.lat, p.lon], { icon: markerIcon(p) });
     marker.bindTooltip(p.name);
-    marker.on("click", function () {
-      state.selectedId = p.id;
-      state.view = "detail";
-      state.flash = null;
-      window.scrollTo(0, 0);
-      render();
-    });
+    marker.on("click", function () { openDetail(p.id); });
     marker.addTo(markerLayer);
   });
 
-  // You, drawn last so nothing sits on top of it.
-  // You stay a plain ring. Everything else is an icon, so the one thing that
-  // isn't a place reads as different at a glance.
+  // You, drawn last so nothing sits on top of it — and as a plain ring, so
+  // the one thing on the map that isn't a place reads as different.
   if (state.position) {
     L.circleMarker([state.position.lat, state.position.lon], {
       radius: 7,
@@ -1371,8 +1371,8 @@ function mountMap() {
 
   if (tilesFailed) drawRings();
 
-  // First time through, frame the view on you and your nearest few. Setting
-  // the flag before moving stops the resulting "moveend" from re-framing.
+  // First time through, frame the view on you and your nearest few. After
+  // that the map stays wherever you have panned it, across re-renders.
   if (!mapPlaced && state.position) {
     mapPlaced = true;
     frameView(nearbyPoints());
@@ -1396,10 +1396,10 @@ function mapSection() {
 }
 
 function detailView() {
-  var found = nearbyPoints().filter(function (r) { return r.point.id === state.selectedId; })[0];
-  if (!found) { state.view = "list"; state.selectedId = null; return listView(); }
+  var p = allPoints().filter(function (x) { return x.id === state.selectedId; })[0];
+  if (!p || !state.position) { state.view = "list"; state.selectedId = null; return listView(); }
 
-  var p = found.point;
+  var found = measure(state.position, p);
   var d = formatDistance(found.km);
   var potable = p.potable === true ? "Yes"
               : p.potable === false ? "No — not for drinking"
@@ -1441,7 +1441,7 @@ function detailView() {
          + "landholder's permission on private ground. Check the rules for "
          + 'your state before you dig.</div>';
   }
-  html += photoSection(p);
+  html += photoSection();
   html += '<p class="note">Distance is straight line, not road distance. Maps needs signal — the link will work once you are back in range.</p>';
   html += '</div>';
   return html;
@@ -1453,7 +1453,7 @@ function detailView() {
    The pictures themselves are drawn in afterwards by showPhotos(), because
    turning a stored file into something an <img> can display is not something
    that can be done while building a string of HTML. */
-function photoSection(p) {
+function photoSection() {
   var html = '<div class="shots" id="shots"></div>';
 
   // Once a picture has been taken it waits here, shown, until you have
@@ -1555,7 +1555,7 @@ function exportMine() {
   var file = new File([text], filename, { type: "application/json" });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file], title: "My dump and water points" })
+    navigator.share({ files: [file], title: "My Yobo Trip points" })
       .catch(function () { downloadFile(text, filename); });
   } else {
     downloadFile(text, filename);
@@ -1647,39 +1647,21 @@ function wireUp() {
 
   Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
     b.onclick = function () {
-      // Keep what's already typed before the screen is rebuilt.
+      // Keep what's already typed; addView draws it back in.
       state.draftName = app.querySelector("#pname").value;
       state.draftNote = app.querySelector("#pnote").value;
       state.formType = b.getAttribute("data-formtype");
       render();
-      app.querySelector("#pname").value = state.draftName || "";
-      app.querySelector("#pnote").value = state.draftNote || "";
     };
   });
 
   Array.prototype.forEach.call(app.querySelectorAll("[data-id]"), function (b) {
     if (b.id === "deletePoint") return;
-    b.onclick = function () {
-      state.selectedId = b.getAttribute("data-id");
-      state.view = "detail";
-      state.flash = null;
-      window.scrollTo(0, 0);
-      render();
-    };
+    b.onclick = function () { openDetail(b.getAttribute("data-id")); };
   });
 
   var back = app.querySelector("#back");
-  if (back) back.onclick = function () {
-    if (state.pendingShot) {
-      URL.revokeObjectURL(state.pendingShot.url);
-      state.pendingShot = null;
-    }
-    state.view = "list";
-    state.selectedId = null;
-    state.formError = null;
-    window.scrollTo(0, 0);
-    render();
-  };
+  if (back) back.onclick = function () { showList(); };
 
   Array.prototype.forEach.call(app.querySelectorAll("[data-mode]"), function (b) {
     b.onclick = function () {
@@ -1802,9 +1784,9 @@ function wireUp() {
     var note = app.querySelector("#pnote").value.trim();
     if (!name) {
       state.formError = "Give it a name so you can find it again.";
+      state.draftName = name;
       state.draftNote = note;
       render();
-      app.querySelector("#pnote").value = note;
       return;
     }
     var record = {
@@ -1825,10 +1807,7 @@ function wireUp() {
       render();
       return;
     }
-    state.view = "list";
-    state.flash = "Saved " + name + ".";
-    window.scrollTo(0, 0);
-    render();
+    showList("Saved " + name + ".");
   };
 
   var del = app.querySelector("#deletePoint");
@@ -1837,11 +1816,7 @@ function wireUp() {
     if (!window.confirm("Delete this point? It can't be undone.")) return;
     state.mine = state.mine.filter(function (p) { return p.id !== id; });
     saveMine(state.mine);
-    state.view = "list";
-    state.selectedId = null;
-    state.flash = "Point deleted.";
-    window.scrollTo(0, 0);
-    render();
+    showList("Point deleted.");
   };
 
   var exportBtn = app.querySelector("#exportMine");

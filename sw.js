@@ -15,17 +15,17 @@
  *              from storage if we have it, and only go to the network
  *              if we don't.
  *
- * IMPORTANT: after you run fetch_points.py and replace points.json,
- * change the version number below (v1 -> v2 -> v3 ...). That is what
- * tells the phone "this is new, throw the old copies away and fetch
- * everything again". Without it the phone will happily keep serving
- * the old data forever, which is exactly what you want in the bush and
- * exactly what you don't want after an update.
+ * IMPORTANT: the version number below is what tells the phone "this is
+ * new, throw the old copies away and fetch everything again". Without a
+ * change to it the phone will happily keep serving the old files forever,
+ * which is exactly what you want in the bush and exactly what you don't
+ * want after an update. fetch_points.py bumps it for you when it writes
+ * new data; after editing index.html or this file, bump it by hand.
  */
 
 /* The app's own files. Bump this number after any change to them, or an
    already-installed phone will keep serving its stored copy for ever. */
-var CACHE_NAME = "yobotrip-v14";
+var CACHE_NAME = "yobotrip-v15";
 
 /* The files the app cannot run without. If any one of these fails to
    download, the whole install fails and the old version stays put —
