@@ -247,7 +247,12 @@
   }
   .leaflet-container { font: inherit; border-radius: 8px; }
   .leaflet-control-attribution { font-size: 10px; }
+  .mapcount {
+    margin: 0 14px 10px; padding: 0 2px;
+    font-size: 14px; font-weight: 600; color: var(--ink-soft); line-height: 1.4;
+  }
   .maptools { display: flex; gap: 10px; margin: 0 14px 16px; }
+
   .maptools .btn { margin-top: 0; }
   .notice {
     margin: 0 14px 12px; padding: 12px 14px;
@@ -749,7 +754,7 @@ var ringLayer = null;    // distance rings, only drawn when tiles are missing
 var tilesFailed = false;
 var mapPlaced = false;   // have we framed the view yet?
 
-var MAX_MARKERS = 200;   // plotting ten thousand dots would crawl
+var MAX_MARKERS = 400;   // as many dots as stay readable and quick
 
 function mapAvailable() {
   return typeof L !== "undefined";
@@ -772,7 +777,11 @@ function initMap() {
   leafletMap = L.map(mapHost, {
     zoomControl: true,
     attributionControl: true,
-    tap: true
+    tap: true,
+    // Draw the dots onto one canvas rather than making a separate SVG shape
+    // for each. With several hundred on screen at once that is the difference
+    // between smooth panning and a slideshow.
+    preferCanvas: true
   });
 
   var tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -791,6 +800,11 @@ function initMap() {
   tiles.addTo(leafletMap);
   markerLayer = L.layerGroup().addTo(leafletMap);
   ringLayer = L.layerGroup().addTo(leafletMap);
+
+  // Redraw whenever you finish panning or zooming. "moveend" fires once the
+  // map has settled, not continuously while your finger is down, so this is
+  // cheap.
+  leafletMap.on("moveend", refreshMarkers);
 }
 
 /* Rings at fixed distances, so a tile-less map still says "how far". */
@@ -809,23 +823,78 @@ function drawRings() {
   });
 }
 
+/* Which points fall inside the part of the map you are actually looking at.
+
+   This is what makes panning work. The list below the map stays sorted by
+   distance from you — that never changes — but the map draws whatever is on
+   screen, so scrolling across to the next town shows that town's points.
+
+   If there are more in view than we are willing to draw, the ones nearest the
+   middle of the screen win, and the count underneath says so. */
+function pointsInView() {
+  if (!leafletMap) return { shown: [], total: 0 };
+
+  var bounds = leafletMap.getBounds();
+
+  var inView = allPoints().filter(function (p) {
+    return state.types.indexOf(p.type) !== -1
+        && bounds.contains(L.latLng(p.lat, p.lon));
+  });
+
+  var total = inView.length;
+
+  if (total > MAX_MARKERS) {
+    // Too many to draw. Take an even sample through the list rather than the
+    // ones closest to the middle of the screen: keeping every Nth point
+    // thins everywhere by the same proportion, so a crowded coastline still
+    // looks crowded next to an empty stretch of the Nullarbor. Picking by
+    // distance from the centre would do the opposite — it would empty out
+    // exactly the busy areas you can see are busy.
+    var step = total / MAX_MARKERS;
+    var thinned = [];
+    for (var i = 0; i < total; i += step) thinned.push(inView[Math.floor(i)]);
+    inView = thinned;
+  }
+
+  return { shown: inView, total: total };
+}
+
+/* The line under the map saying what you're looking at. Written straight into
+   the page rather than going through render(), because this updates on every
+   pan and rebuilding the whole screen that often would be wasteful. */
+function updateMapCount(view) {
+  var el = document.getElementById("mapCount");
+  if (!el) return;
+
+  if (view.total === 0) {
+    el.textContent = "Nothing of the kinds you've chosen in this view.";
+  } else if (view.shown.length < view.total) {
+    el.textContent = "Too many to draw — showing " + view.shown.length
+      + " of " + view.total.toLocaleString() + " spread evenly. Zoom in for all of them.";
+  } else {
+    el.textContent = view.total.toLocaleString()
+      + (view.total === 1 ? " point" : " points") + " in view.";
+  }
+}
+
 function refreshMarkers() {
-  if (!markerLayer || !state.position) return;
+
+  if (!markerLayer) return;
   markerLayer.clearLayers();
 
-  var results = nearbyPoints().slice(0, MAX_MARKERS);
+  var view = pointsInView();
 
-  results.forEach(function (r) {
-    var marker = L.circleMarker([r.point.lat, r.point.lon], {
+  view.shown.forEach(function (p) {
+    var marker = L.circleMarker([p.lat, p.lon], {
       radius: 8,
-      color: r.point.mine ? cssVar("--ink") : "#fff",
-      weight: r.point.mine ? 3 : 2,
-      fillColor: pointColour(r.point),
+      color: p.mine ? cssVar("--ink") : "#fff",
+      weight: p.mine ? 3 : 2,
+      fillColor: pointColour(p),
       fillOpacity: 1
     });
-    marker.bindTooltip(r.point.name);
+    marker.bindTooltip(p.name);
     marker.on("click", function () {
-      state.selectedId = r.point.id;
+      state.selectedId = p.id;
       state.view = "detail";
       state.flash = null;
       window.scrollTo(0, 0);
@@ -835,16 +904,18 @@ function refreshMarkers() {
   });
 
   // You, drawn last so nothing sits on top of it.
-  L.circleMarker([state.position.lat, state.position.lon], {
-    radius: 6,
-    color: cssVar("--ink"),
-    weight: 3,
-    fillColor: "#fff",
-    fillOpacity: 1,
-    interactive: false
-  }).addTo(markerLayer);
+  if (state.position) {
+    L.circleMarker([state.position.lat, state.position.lon], {
+      radius: 6,
+      color: cssVar("--ink"),
+      weight: 3,
+      fillColor: "#fff",
+      fillOpacity: 1,
+      interactive: false
+    }).addTo(markerLayer);
+  }
 
-  if (!mapPlaced) { frameView(results); mapPlaced = true; }
+  updateMapCount(view);
 }
 
 /* Zoom and centre so you and the nearest handful are all on screen. */
@@ -875,6 +946,14 @@ function mountMap() {
   else leafletMap.invalidateSize();
 
   if (tilesFailed) drawRings();
+
+  // First time through, frame the view on you and your nearest few. Setting
+  // the flag before moving stops the resulting "moveend" from re-framing.
+  if (!mapPlaced && state.position) {
+    mapPlaced = true;
+    frameView(nearbyPoints());
+  }
+
   refreshMarkers();
 }
 
@@ -885,6 +964,7 @@ function mapSection() {
          + 'and distance rings only. Tiles fill in whenever you have signal.</div>';
   }
   html += '<div class="mapslot" id="mapSlot"></div>';
+  html += '<div class="mapcount" id="mapCount"></div>';
   html += '<div class="maptools">'
        + '<button class="btn secondary" id="recentre">Centre on me</button>'
        + '</div>';
@@ -1075,7 +1155,7 @@ function wireUp() {
 
   var recentre = app.querySelector("#recentre");
   if (recentre) recentre.onclick = function () {
-    frameView(nearbyPoints().slice(0, MAX_MARKERS));
+    frameView(nearbyPoints());
   };
 
   var relocate = app.querySelector("#relocate");
