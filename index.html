@@ -26,6 +26,7 @@
     --bakery: #8A6A00;
     --beverages: #5B3B8C;
     --fuel: #0D6A6E;
+    --pub: #97276E;
     --flag: #7A5B00;
     --flag-bg: #F0DFA8;
     --mine: #3F4636;
@@ -46,8 +47,75 @@
   body {
     max-width: 560px;
     margin: 0 auto;
-    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    padding: 0 0 env(safe-area-inset-bottom);
     min-height: 100vh;
+  }
+
+  /* ---- app bar ----
+     The dark strip runs up under the notch, which is why the top padding
+     lives here rather than on the body. */
+  .appbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px 15px;
+    padding-top: calc(14px + env(safe-area-inset-top));
+    background: var(--ink);
+    color: var(--bg);
+  }
+  .appbar .mark { flex: 0 0 30px; width: 30px; height: 30px; display: block; }
+  .appbar h1 {
+    flex: 1; margin: 0;
+    font-size: 19px; font-weight: 800; letter-spacing: -0.015em;
+  }
+  .appbar .count {
+    font-size: 12px; font-weight: 700; letter-spacing: .02em;
+    opacity: .7; text-align: right; line-height: 1.3;
+  }
+
+  /* ---- collapsible filter ----
+     Eight categories is a lot of screen to spend on something you set once.
+     Collapsed, the bar still shows which are on, so nothing is hidden —
+     only folded away. */
+  .filterbar {
+    display: flex; align-items: center; gap: 10px;
+    width: calc(100% - 28px);
+    margin: 14px;
+    min-height: 58px;
+    padding: 8px 14px;
+    background: var(--surface);
+    border: none; border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+  }
+  .filterbar:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+  .filterbar .lead {
+    flex: 0 0 auto;
+    font-size: 12px; font-weight: 700; color: var(--ink-soft);
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .filterbar .on {
+    flex: 1; display: flex; gap: 4px; align-items: center;
+    overflow: hidden;
+  }
+  .filterbar .none { font-size: 15px; font-weight: 700; color: var(--dump); }
+  .filterbar .more {
+    font-size: 13px; font-weight: 800; color: var(--ink-soft);
+    padding-left: 2px;
+  }
+  .filterbar .chev {
+    flex: 0 0 auto; font-size: 18px; font-weight: 800; color: var(--ink);
+    line-height: 1;
+    transition: transform .15s ease;
+  }
+  .filterbar[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  @media (prefers-reduced-motion: reduce) { .filterbar .chev { transition: none; } }
+
+  /* the little coloured disc used in the collapsed summary */
+  .dot {
+    flex: 0 0 auto;
+    display: inline-grid; place-items: center;
+    width: 25px; height: 25px; border-radius: 50%;
+    background: #fff; border: 2px solid var(--c);
+    font-size: 12px; line-height: 1;
   }
 
   .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
@@ -91,6 +159,7 @@
     background: var(--surface);
     margin: 0 14px 16px;
     border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10), 0 6px 16px rgba(20, 24, 14, .07);
     padding: 20px 20px 22px;
     display: flex;
     gap: 18px;
@@ -142,7 +211,10 @@
   }
 
   /* ---- list ---- */
-  .list { background: var(--surface); margin: 0 14px; border-radius: 8px; overflow: hidden; }
+  .list {
+    background: var(--surface); margin: 0 14px; border-radius: 8px; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
+  }
   .row {
     display: flex; align-items: center; gap: 14px;
     width: 100%; min-height: 66px; padding: 12px 18px;
@@ -168,6 +240,7 @@
   .tag.bakery { background: var(--bakery); }
   .tag.beverages { background: var(--beverages); }
   .tag.fuel { background: var(--fuel); }
+  .tag.pub { background: var(--pub); }
   .tag.mine { background: var(--mine); }
 
   /* ---- category chips ---- */
@@ -208,6 +281,7 @@
   .panel {
     background: var(--surface); margin: 0 14px 16px;
     border-radius: 8px; padding: 20px;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
   }
   .panel h2 { margin: 0 0 6px; font-size: 19px; font-weight: 700; }
   .panel p { margin: 0 0 14px; font-size: 15px; line-height: 1.45; color: var(--ink-soft); }
@@ -306,6 +380,18 @@
 
 <script src="leaflet.js"></script>
 
+<header class="appbar">
+  <!-- A compass rose: the app's whole job is which way, and how far. Drawn
+       here rather than loaded as an image so there is nothing to fetch. -->
+  <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+    <circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M16 5 L20 18 L16 15.5 L12 18 Z" fill="currentColor"/>
+    <path d="M16 27 L12 14 L16 16.5 L20 14 Z" fill="currentColor" opacity=".35"/>
+  </svg>
+  <h1>Dump &amp; Water</h1>
+  <span class="count" id="pointCount"></span>
+</header>
+
 <div id="app"></div>
 
 <script>
@@ -354,7 +440,8 @@ var TYPES = [
   { id: "butcher",   short: "Butcher",   full: "Butcher",     icon: "🥩" },
   { id: "bakery",    short: "Bakery",    full: "Bakery",      icon: "🥖" },
   { id: "beverages", short: "Beverages", full: "Beverages",   icon: "🍺" },
-  { id: "fuel",      short: "Fuel",      full: "Fuel",        icon: "⛽"    }
+  { id: "fuel",      short: "Fuel",      full: "Fuel",        icon: "⛽"    },
+  { id: "pub",       short: "Pub",       full: "Pub",         icon: "🍻" }
 ];
 
 function typeInfo(id) {
@@ -499,6 +586,7 @@ var state = {
   position: null,        // { lat, lon, source: "gps" | "manual" }
   types: ["dump", "water"],   // which categories are switched on
   mode: "list",          // "list" | "map" — how results are shown
+  filtersOpen: false,    // is the category picker folded out?
   view: "list",          // "list" | "detail" | "add"
   selectedId: null,
   locating: true,
@@ -610,6 +698,7 @@ function render() {
   else if (state.view === "add") app.innerHTML = addView();
   else app.innerHTML = listView();
   wireUp();
+  updateCount();
   if (state.view === "list" && state.mode === "map") mountMap();
 }
 
@@ -618,26 +707,78 @@ function flashStrip() {
   return '<div class="flag">' + escapeHtml(state.flash) + '</div>';
 }
 
+/* The tally lives in the app bar, which sits outside the part of the page
+   render() rebuilds — so it is written straight to its element. */
+function updateCount() {
+  var el = document.getElementById("pointCount");
+  if (!el) return;
+  el.textContent = BUNDLED.length.toLocaleString() + " places"
+    + (state.mine.length ? " + " + state.mine.length + " yours" : "");
+}
+
 function sourceStrip() {
   if (USING_SAMPLE) {
     return '<div class="flag">Sample data — ' + BUNDLED.length
       + ' placeholder points. Run fetch_points.py to load the real OpenStreetMap set.</div>';
   }
-  return '<div class="flag ok">' + BUNDLED.length.toLocaleString() + ' bundled points'
-    + (state.mine.length ? ' + ' + state.mine.length + ' of yours' : '') + '</div>';
+  return "";
+}
+
+/* The category picker. Folded away by default: you choose what you're
+   after once and it is remembered, so it doesn't need to sit there taking
+   up a third of the screen every time you open the app. Collapsed, it still
+   shows which categories are on. */
+function filterBlock() {
+  var open = state.filtersOpen;
+
+  // Only so many discs fit on one line, and a summary that wraps onto two
+  // looks like a mistake. Past six we show a count instead of running on.
+  var SHOW_AT_MOST = 6;
+  var on = TYPES.filter(function (t) { return state.types.indexOf(t.id) !== -1; });
+
+  var summary = "";
+  if (on.length === 0) {
+    summary = '<span class="none">Nothing selected</span>';
+  } else {
+    on.slice(0, SHOW_AT_MOST).forEach(function (t) {
+      summary += '<span class="dot" style="--c: var(--' + t.id + ')" '
+        + 'title="' + escapeHtml(t.full) + '" aria-hidden="true">' + t.icon + '</span>';
+    });
+    if (on.length > SHOW_AT_MOST) {
+      summary += '<span class="more">+' + (on.length - SHOW_AT_MOST) + '</span>';
+    }
+  }
+
+  var spoken = on.length === 0 ? "no categories"
+             : on.map(function (t) { return t.full; }).join(", ");
+
+  var html = '<button class="filterbar" id="toggleFilters" '
+    + 'aria-expanded="' + open + '" aria-controls="typeChips" '
+    + 'aria-label="Categories: ' + escapeHtml(spoken) + '. Tap to change.">'
+    + '<span class="lead" aria-hidden="true">Showing</span>'
+    + '<span class="on">' + summary + '</span>'
+    + '<span class="chev" aria-hidden="true">▾</span>'
+    + '</button>';
+
+  if (open) {
+    html += '<div class="types" id="typeChips">';
+    TYPES.forEach(function (t) {
+      html += '<button data-type="' + t.id + '" style="--c: var(--' + t.id + ')" '
+        + 'aria-pressed="' + (state.types.indexOf(t.id) !== -1) + '">'
+        + '<span class="ico" aria-hidden="true">' + t.icon + '</span>' + t.short + '</button>';
+    });
+    html += '</div>';
+  }
+
+  return html;
 }
 
 function listView() {
+
   var results = nearbyPoints();
   var html = flashStrip() + sourceStrip();
 
-  html += '<div class="types">';
-  TYPES.forEach(function (t) {
-    html += '<button data-type="' + t.id + '" style="--c: var(--' + t.id + ')" '
-      + 'aria-pressed="' + (state.types.indexOf(t.id) !== -1) + '">'
-      + '<span class="ico" aria-hidden="true">' + t.icon + '</span>' + t.short + '</button>';
-  });
-  html += '</div>';
+  html += filterBlock();
 
   if (mapAvailable()) {
     html += '<div class="filter" style="padding-top:0">'
@@ -1169,6 +1310,13 @@ function importFrom(text) {
    ============================================================ */
 
 function wireUp() {
+  var toggleFilters = app.querySelector("#toggleFilters");
+  if (toggleFilters) toggleFilters.onclick = function () {
+    state.filtersOpen = !state.filtersOpen;
+    state.flash = null;
+    render();
+  };
+
   Array.prototype.forEach.call(app.querySelectorAll("[data-type]"), function (b) {
     b.onclick = function () {
       var id = b.getAttribute("data-type");
