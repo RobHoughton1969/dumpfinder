@@ -25,7 +25,7 @@
 
 /* The app's own files. Bump this number after any change to them, or an
    already-installed phone will keep serving its stored copy for ever. */
-var CACHE_NAME = "yobotrip-v15";
+var CACHE_NAME = "yobotrip-v16";
 
 /* The files the app cannot run without. If any one of these fails to
    download, the whole install fails and the old version stays put —
@@ -41,13 +41,19 @@ var CORE_FILES = [
   "./leaflet.css"
 ];
 
-/* Map tiles live in their own store. They are not part of the app, they
-   accumulate as you look around, and they must survive an app update —
-   so they are kept apart from the versioned cache above and never
-   deleted when the version number changes. */
-var TILE_CACHE = "yobotrip-tiles";
-var TILE_HOSTS = ["tile.openstreetmap.org"];
-var MAX_TILES = 3000;          // roughly 150 MB at worst; usually far less
+/* Map tiles live in their own stores. They are not part of the app, they
+   accumulate as you look around, and they must survive an app update — so
+   they are kept apart from the versioned cache above and never deleted
+   when the version number changes.
+
+   One store per picture. Satellite tiles are two or three times the size
+   of drawn ones, so they get their own cap rather than sharing one with
+   the road map and crowding it out. */
+var TILE_CACHES = {
+  "tile.openstreetmap.org": "yobotrip-tiles",
+  "server.arcgisonline.com": "yobotrip-imagery"
+};
+var MAX_TILES = 3000;          // per store; roughly 150 MB at worst for the map
 
 /* points.json is handled separately because it might not exist yet —
    until you run the Python script the app falls back to its built-in
@@ -93,7 +99,7 @@ self.addEventListener("activate", function (event) {
         // map tiles. Those are not part of the app, they are expensive to
         // collect, and throwing them away on every update would undo exactly
         // the thing that makes the map work out of range.
-        if (name === CACHE_NAME || name === TILE_CACHE) return null;
+        if (name === CACHE_NAME || isTileStore(name)) return null;
         return caches.delete(name);
       }));
     }).then(function () {
@@ -110,8 +116,9 @@ self.addEventListener("fetch", function (event) {
   var url = new URL(request.url);
 
   // Map tiles: serve a stored one if we have it, otherwise fetch and keep it.
-  if (TILE_HOSTS.indexOf(url.hostname) !== -1) {
-    event.respondWith(serveTile(request));
+  var store = TILE_CACHES[url.hostname];
+  if (store) {
+    event.respondWith(serveTile(request, store));
     return;
   }
 
@@ -145,8 +152,13 @@ self.addEventListener("fetch", function (event) {
    inside it. That is fine for a picture. It does mean we can't tell a
    real tile from an error page, so only responses that arrived without
    throwing get kept. */
-function serveTile(request) {
-  return caches.open(TILE_CACHE).then(function (cache) {
+function isTileStore(name) {
+  for (var host in TILE_CACHES) if (TILE_CACHES[host] === name) return true;
+  return false;
+}
+
+function serveTile(request, store) {
+  return caches.open(store).then(function (cache) {
     return cache.match(request).then(function (hit) {
       if (hit) return hit;
 

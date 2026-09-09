@@ -415,6 +415,18 @@
     color: var(--dump); text-decoration: underline; cursor: pointer;
   }
 
+  /* ---- fuel calculator ---- */
+  .fuel-out { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--rule); }
+  .fuel-out .big { font-size: 54px; font-weight: 800; letter-spacing: -0.045em; line-height: .95; }
+  .fuel-out .big small { font-size: 22px; font-weight: 600; letter-spacing: 0; }
+  .fuel-out .sub { font-size: 15px; font-weight: 600; color: var(--ink-soft); margin-top: 4px; }
+  .fuel-out .hint { margin: 0; font-size: 15px; color: var(--ink-soft); }
+  .fuel-dl { margin: 16px 0 0; }
+  .fuel-dl dt { font-size: 13px; font-weight: 700; color: var(--ink-soft); padding-top: 12px; }
+  .fuel-dl dd { margin: 2px 0 0; font-size: 20px; font-weight: 700; }
+  .fuel-dl .ok { color: var(--camp); }
+  .fuel-dl .bad { color: var(--butcher); }
+
   .hidden { display: none; }
 
 </style>
@@ -515,24 +527,34 @@ var USING_SAMPLE = true;
    look like a tidy-up and would in fact throw the lot away. */
 var STORAGE_KEY = "dumpfinder.mypoints.v1";
 var TYPES_KEY = "dumpfinder.types.v1";
+var BASEMAP_KEY = "yobotrip.basemap.v1";
+var FUEL_KEY = "yobotrip.fuel.v1";
 
-/* Which categories you last had switched on. Remembered so the app opens
-   the way you left it rather than resetting every time. */
-function loadTypes(fallback) {
+/* One small routine for every "remember this between opens" value: read it
+   back as JSON, and if anything at all goes wrong, hand back the default. */
+function remembered(key, fallback) {
   try {
-    var text = localStorage.getItem(TYPES_KEY);
-    if (!text) return fallback;
-    var list = JSON.parse(text);
-    return (Array.isArray(list) && list.length) ? list : fallback;
+    var text = localStorage.getItem(key);
+    return text ? JSON.parse(text) : fallback;
   } catch (e) {
     return fallback;
   }
 }
 
-function saveTypes(list) {
-  try { localStorage.setItem(TYPES_KEY, JSON.stringify(list)); } catch (e) {}
+function remember(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
 }
 
+/* Which categories you last had switched on. Remembered so the app opens
+   the way you left it rather than resetting every time. */
+function loadTypes(fallback) {
+  var list = remembered(TYPES_KEY, null);
+  return (Array.isArray(list) && list.length) ? list : fallback;
+}
+
+function saveTypes(list) {
+  remember(TYPES_KEY, list);
+}
 
 function loadMine() {
   try {
@@ -786,10 +808,12 @@ var state = {
   position: null,        // { lat, lon, source: "gps" | "manual" }
   types: ["dump", "water"],   // which categories are switched on
   mode: "map",           // "list" | "map" — the app opens on the map
+  basemap: "map",        // "map" | "satellite" — what the tiles show
+  fuel: { litres: "", usage: "", distance: "" },   // the calculator's fields
   filtersOpen: false,    // is the category picker folded out?
   photoBusy: false,      // a picture is being shrunk right now
   pendingShot: null,     // a photo taken but not yet saved
-  view: "list",          // "list" | "detail" | "add"
+  view: "list",          // "list" | "detail" | "add" | "fuel"
   selectedId: null,
   locating: true,
   locationError: null,
@@ -896,6 +920,7 @@ function tagsFor(p, short) {
 function render() {
   if (state.view === "detail") app.innerHTML = detailView();
   else if (state.view === "add") app.innerHTML = addView();
+  else if (state.view === "fuel") app.innerHTML = fuelView();
   else app.innerHTML = listView();
   wireUp();
   updateCount();
@@ -1036,7 +1061,7 @@ function listView() {
   }
 
   if (!state.position) {
-    return html + manualPanel(state.locationError) + myPointsPanel();
+    return html + manualPanel(state.locationError) + toolsBlock() + myPointsPanel();
   }
 
   if (results.length === 0) {
@@ -1071,9 +1096,17 @@ function listView() {
 
   html += '<div class="actions">'
     + '<button class="btn" id="addHere">Save this spot as a point</button>'
+    + '<button class="btn secondary" id="openFuel">Fuel calculator</button>'
     + '</div>';
 
   return html + myPointsPanel();
+}
+
+/* Shown when there's no position yet: the calculator doesn't need one. */
+function toolsBlock() {
+  return '<div class="actions">'
+    + '<button class="btn secondary" id="openFuel">Fuel calculator</button>'
+    + '</div>';
 }
 
 function manualPanel(message) {
@@ -1168,6 +1201,52 @@ var mapPlaced = false;   // have we framed the view yet?
 
 var MAX_MARKERS = 400;   // as many dots as stay readable and quick
 
+/* The two pictures the map can be drawn on. OpenStreetMap is a drawn map —
+   roads, names, boundaries. There is no photography behind it to switch to,
+   so satellite comes from somewhere else: Esri's World Imagery, which is
+   free for this kind of use and asks only to be credited.
+
+   Note the tile address for the imagery ends {y}/{x}, the other way round
+   from OpenStreetMap. Esri's server wants row before column. */
+var BASEMAPS = {
+  map: {
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: { maxZoom: 17, attribution: "&copy; OpenStreetMap contributors" }
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: { maxZoom: 18, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }
+  }
+};
+var tileLayers = {};       // each basemap's layer, built the first time it's shown
+var activeBasemap = null;  // which one is on the map right now
+
+/* Swaps the picture under the pins. Layers are built once and kept, so
+   flicking between the two doesn't re-fetch anything already seen. */
+function setBasemap(name) {
+  if (!leafletMap || !BASEMAPS[name] || name === activeBasemap) return;
+
+  if (activeBasemap) leafletMap.removeLayer(tileLayers[activeBasemap]);
+
+  if (!tileLayers[name]) {
+    var layer = L.tileLayer(BASEMAPS[name].url, BASEMAPS[name].options);
+    // Fired when a tile can't be fetched — offline, or never cached. Only
+    // the layer currently showing gets to say so.
+    layer.on("tileerror", function () {
+      if (activeBasemap !== name || tilesFailed) return;
+      tilesFailed = true;
+      drawRings();
+      render();
+    });
+    tileLayers[name] = layer;
+  }
+
+  activeBasemap = name;
+  tilesFailed = false;                  // a fresh layer gets a fresh chance
+  if (ringLayer) ringLayer.clearLayers();
+  tileLayers[name].addTo(leafletMap);
+}
+
 function mapAvailable() {
   return typeof L !== "undefined";
 }
@@ -1188,22 +1267,9 @@ function initMap() {
     preferCanvas: true
   });
 
-  var tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 17,
-    attribution: '&copy; OpenStreetMap contributors'
-  });
-
-  // Fired when a tile can't be fetched — offline, or never cached.
-  tiles.on("tileerror", function () {
-    if (tilesFailed) return;
-    tilesFailed = true;
-    drawRings();
-    render();
-  });
-
-  tiles.addTo(leafletMap);
   markerLayer = L.layerGroup().addTo(leafletMap);
   ringLayer = L.layerGroup().addTo(leafletMap);
+  setBasemap(state.basemap);
 
   // Redraw whenever you finish panning or zooming. "moveend" fires once the
   // map has settled, not continuously while your finger is down, so this is
@@ -1368,6 +1434,7 @@ function mountMap() {
   // and any attempt to frame a view then collapses to zoom 0 and a picture
   // of the whole planet. invalidateSize makes it measure again.
   leafletMap.invalidateSize();
+  setBasemap(state.basemap);            // no-op unless the switch was tapped
 
   if (tilesFailed) drawRings();
 
@@ -1389,8 +1456,11 @@ function mapSection() {
   }
   html += '<div class="mapslot" id="mapSlot"></div>';
   html += '<div class="mapcount" id="mapCount"></div>';
+  // The switch is labelled with what you'd get by pressing it.
   html += '<div class="maptools">'
        + '<button class="btn secondary" id="recentre">Centre on me</button>'
+       + '<button class="btn secondary" id="basemapToggle">'
+       + (state.basemap === "map" ? "Satellite" : "Map") + '</button>'
        + '</div>';
   return html;
 }
@@ -1534,7 +1604,80 @@ function showPhotos(pointId) {
 }
 
 /* ============================================================
+   6c. FUEL CALCULATOR
+
+   Three numbers in, and the arithmetic done for you:
+
+     range   = litres in the tank ÷ litres per 100 km × 100
+     needed  = distance to go × litres per 100 km ÷ 100
+
+   The fields are remembered, so once your tank size and consumption are
+   in you only ever change the distance. Results update as you type —
+   there is no button to press, and the screen is not rebuilt, so the
+   keyboard stays where it is.
+   ============================================================ */
+
+function fuelView() {
+  var f = state.fuel;
+  var html = '<div class="detail">';
+  html += '<button class="back" id="back">Back</button>';
+  html += '<h1>Fuel calculator</h1>';
+  html += '<div class="panel">';
+  html += fuelField("fLitres", "litres", "Fuel in the tank (litres)", "e.g. 80");
+  html += fuelField("fUsage", "usage", "Fuel use (litres per 100 km)", "e.g. 14.5");
+  html += fuelField("fDistance", "distance", "Distance to go (km) — optional", "e.g. 320");
+  html += '<div class="fuel-out" id="fuelOut">' + fuelResult() + '</div>';
+  html += '</div>';
+  html += '<p class="note">Plain arithmetic on the numbers you give it. Towing, '
+       + 'headwinds and hills all push use up — leave yourself a margin.</p>';
+  html += '</div>';
+  return html;
+}
+
+function fuelField(id, key, label, placeholder) {
+  // inputmode="decimal" brings up the number keypad on the phone.
+  return '<label for="' + id + '">' + label + '</label>'
+    + '<input id="' + id + '" data-fuel="' + key + '" type="text" inputmode="decimal" '
+    + 'autocomplete="off" placeholder="' + placeholder + '" '
+    + 'value="' + escapeHtml(state.fuel[key]) + '">';
+}
+
+function fuelResult() {
+  var litres = parseFloat(state.fuel.litres);
+  var usage = parseFloat(state.fuel.usage);
+  var dist = parseFloat(state.fuel.distance);
+
+  // "!(x > 0)" is the tidy way to catch both "not a number" and "zero or
+  // less" in one go — NaN fails every comparison.
+  if (!(litres > 0) || !(usage > 0)) {
+    return '<p class="hint">Enter fuel and usage to see your range.</p>';
+  }
+
+  var range = litres / usage * 100;
+  var html = '<div class="big num">' + Math.round(range) + '<small> km</small></div>'
+           + '<div class="sub">range on what is in the tank</div>';
+
+  if (dist > 0) {
+    var needed = dist * usage / 100;
+    var spare = litres - needed;
+    html += '<dl class="fuel-dl">'
+      + '<dt>Fuel needed for ' + Math.round(dist) + ' km</dt>'
+      + '<dd class="num">' + needed.toFixed(1) + ' L</dd>';
+    if (spare >= 0) {
+      html += '<dt>Left on arrival</dt><dd class="num ok">' + spare.toFixed(1) + ' L'
+        + ' &middot; ' + Math.round(spare / usage * 100) + ' km in hand</dd>';
+    } else {
+      html += '<dt>Short by</dt><dd class="num bad">' + (-spare).toFixed(1) + ' L'
+        + ' &middot; ' + Math.round(-spare / usage * 100) + ' km</dd>';
+    }
+    html += '</dl>';
+  }
+  return html;
+}
+
+/* ============================================================
    7. EXPORT AND IMPORT
+
 
    Export builds a file in memory and hands it either to the iOS
    share sheet (so it can go to Files, Messages, AirDrop) or to a
@@ -1675,6 +1818,32 @@ function wireUp() {
   if (recentre) recentre.onclick = function () {
     frameView(nearbyPoints());
   };
+
+  var basemapToggle = app.querySelector("#basemapToggle");
+  if (basemapToggle) basemapToggle.onclick = function () {
+    state.basemap = state.basemap === "map" ? "satellite" : "map";
+    remember(BASEMAP_KEY, state.basemap);
+    render();                            // mountMap does the actual swap
+  };
+
+  var openFuel = app.querySelector("#openFuel");
+  if (openFuel) openFuel.onclick = function () {
+    state.view = "fuel";
+    state.flash = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  // The calculator recalculates on every keystroke, writing only the result
+  // block so the field you're typing in keeps its focus and keyboard.
+  Array.prototype.forEach.call(app.querySelectorAll("[data-fuel]"), function (input) {
+    input.oninput = function () {
+      state.fuel[input.getAttribute("data-fuel")] = input.value;
+      remember(FUEL_KEY, state.fuel);
+      var out = document.getElementById("fuelOut");
+      if (out) out.innerHTML = fuelResult();
+    };
+  });
 
   var relocate = app.querySelector("#relocate");
   if (relocate) relocate.onclick = requestGPS;
@@ -1873,6 +2042,13 @@ function registerServiceWorker() {
 
 state.mine = loadMine();
 state.types = loadTypes(state.types);
+state.basemap = BASEMAPS[remembered(BASEMAP_KEY, "map")] ? remembered(BASEMAP_KEY, "map") : "map";
+var savedFuel = remembered(FUEL_KEY, null);
+if (savedFuel && typeof savedFuel === "object") {
+  ["litres", "usage", "distance"].forEach(function (k) {
+    if (typeof savedFuel[k] === "string") state.fuel[k] = savedFuel[k];
+  });
+}
 
 render();
 loadBundled().then(function () { render(); });
