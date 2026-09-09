@@ -1,0 +1,16 @@
+{
+  "name": "Dump & Water Finder",
+  "short_name": "Dump & Water",
+  "description": "Offline finder for caravan dump points and drinking water fill points.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#D9DBD2",
+  "theme_color": "#D9DBD2",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

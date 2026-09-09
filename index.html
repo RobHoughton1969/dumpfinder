@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#D9DBD2">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Dump &amp; Water">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="leaflet.css">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<title>Dump &amp; Water</title>
+<style>
+  :root {
+    --bg: #D9DBD2;
+    --surface: #FFFFFF;
+    --ink: #14180E;
+    --ink-soft: #5A6050;
+    --rule: #BEC2B6;
+    --dump: #9C4A16;
+    --water: #1B4F8A;
+    --flag: #7A5B00;
+    --flag-bg: #F0DFA8;
+    --mine: #4A5A2A;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    min-height: 100vh;
+  }
+
+  .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+  /* ---- data-source strip ---- */
+  .flag {
+    background: var(--flag-bg);
+    color: var(--flag);
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+  .flag.ok { background: transparent; color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- filter / segmented control ---- */
+  .filter {
+    display: flex;
+    gap: 2px;
+    padding: 14px 14px 12px;
+  }
+  .filter button {
+    flex: 1;
+    min-height: 54px;
+    border: 2px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-weight: 700;
+    font-size: 17px;
+    cursor: pointer;
+  }
+  .filter button:first-child { border-radius: 6px 0 0 6px; }
+  .filter button:last-child { border-radius: 0 6px 6px 0; }
+  .filter button + button { border-left-width: 0; }
+  .filter button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+  .filter button:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+
+  /* ---- hero readout ---- */
+  .hero {
+    background: var(--surface);
+    margin: 0 14px 16px;
+    border-radius: 8px;
+    padding: 20px 20px 22px;
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    cursor: pointer;
+    border: none;
+    width: calc(100% - 28px);
+    text-align: left;
+    font: inherit;
+    color: inherit;
+  }
+  .hero:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+
+  .compass {
+    flex: 0 0 78px;
+    height: 78px;
+    border-radius: 50%;
+    border: 3px solid var(--ink);
+    display: grid;
+    place-items: center;
+    position: relative;
+  }
+  .needle {
+    width: 0; height: 0;
+    border-left: 11px solid transparent;
+    border-right: 11px solid transparent;
+    border-bottom: 34px solid var(--ink);
+    transform-origin: 50% 68%;
+    transition: transform .5s cubic-bezier(.2,.8,.2,1);
+  }
+  @media (prefers-reduced-motion: reduce) { .needle { transition: none; } }
+
+  .hero-body { flex: 1; min-width: 0; }
+  .hero .dist {
+    font-size: 54px;
+    font-weight: 800;
+    letter-spacing: -0.045em;
+    line-height: .95;
+    display: block;
+  }
+  .hero .dist small { font-size: 22px; font-weight: 600; letter-spacing: 0; }
+  .hero .bearing {
+    font-size: 19px; font-weight: 700; color: var(--ink-soft);
+    display: block; margin-top: 4px;
+  }
+  .hero .name {
+    font-size: 20px; font-weight: 600; margin-top: 12px; line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- list ---- */
+  .list { background: var(--surface); margin: 0 14px; border-radius: 8px; overflow: hidden; }
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    width: 100%; min-height: 66px; padding: 12px 18px;
+    background: none; border: none; border-top: 1px solid var(--rule);
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+  }
+  .row:first-child { border-top: none; }
+  .row:focus-visible { outline: 3px solid var(--water); outline-offset: -3px; }
+  .row .d { flex: 0 0 84px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+  .row .d small { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+  .row .b { flex: 0 0 46px; font-size: 16px; font-weight: 700; color: var(--ink-soft); }
+  .row .n { flex: 1; min-width: 0; font-size: 16px; line-height: 1.3; overflow-wrap: anywhere; }
+
+  .tag {
+    display: inline-block; margin-top: 3px; margin-right: 4px;
+    font-size: 12px; font-weight: 700; letter-spacing: .02em;
+    padding: 2px 7px; border-radius: 3px; color: #fff;
+  }
+  .tag.dump { background: var(--dump); }
+  .tag.water { background: var(--water); }
+  .tag.mine { background: var(--mine); }
+
+  /* ---- location bar ---- */
+  .loc {
+    margin: 18px 14px 14px;
+    font-size: 14px; color: var(--ink-soft); line-height: 1.5;
+  }
+  .loc button {
+    font: inherit; font-weight: 700; font-size: 14px;
+    background: none; border: none; padding: 6px 0;
+    color: var(--ink); text-decoration: underline; cursor: pointer;
+  }
+
+  /* ---- panels, inputs, buttons ---- */
+  .panel {
+    background: var(--surface); margin: 0 14px 16px;
+    border-radius: 8px; padding: 20px;
+  }
+  .panel h2 { margin: 0 0 6px; font-size: 19px; font-weight: 700; }
+  .panel p { margin: 0 0 14px; font-size: 15px; line-height: 1.45; color: var(--ink-soft); }
+  .panel label {
+    display: block; font-size: 13px; font-weight: 700;
+    color: var(--ink-soft); margin: 14px 0 5px;
+  }
+  .panel input, .panel textarea {
+    width: 100%; min-height: 54px; padding: 14px;
+    font: inherit; font-size: 17px;
+    border: 2px solid var(--rule); border-radius: 6px; background: #fff; color: var(--ink);
+  }
+  .panel textarea { min-height: 92px; resize: vertical; line-height: 1.4; }
+  .panel input:focus, .panel textarea:focus { border-color: var(--ink); outline: none; }
+  .btn {
+    display: grid; place-items: center;
+    width: 100%; min-height: 54px; margin-top: 10px; padding: 0 14px;
+    background: var(--ink); color: var(--bg);
+    border: none; border-radius: 6px;
+    font: inherit; font-weight: 700; font-size: 17px;
+    text-decoration: none; cursor: pointer;
+  }
+  .btn.secondary { background: transparent; color: var(--ink); border: 2px solid var(--ink); }
+  .btn.danger { background: transparent; color: var(--dump); border: 2px solid var(--dump); }
+  .btn:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+  .err { color: var(--dump); font-size: 15px; font-weight: 600; margin-top: 10px; }
+  .note { color: var(--ink-soft); font-size: 14px; margin-top: 10px; line-height: 1.45; }
+
+  .actions { margin: 0 14px 32px; }
+  .pair { display: flex; gap: 10px; }
+  .pair .btn { flex: 1; }
+
+  /* ---- detail ---- */
+  .detail { padding: 0 14px 40px; }
+  .back {
+    background: none; border: none; font: inherit; font-weight: 700;
+    padding: 16px 4px; color: var(--ink); cursor: pointer; font-size: 17px;
+  }
+  .detail h1 { font-size: 27px; font-weight: 700; line-height: 1.2; margin: 0 0 14px; }
+  .detail dl { margin: 14px 0 0; background: var(--surface); border-radius: 8px; padding: 4px 18px; }
+  .detail dt { font-size: 13px; font-weight: 700; color: var(--ink-soft); padding-top: 14px; }
+  .detail dd { margin: 2px 0 14px; font-size: 17px; line-height: 1.4; }
+  /* ---- map ---- */
+  .mapslot { margin: 0 14px 12px; }
+  #map {
+    height: 58vh; min-height: 300px;
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .leaflet-container { font: inherit; border-radius: 8px; }
+  .leaflet-control-attribution { font-size: 10px; }
+  .maptools { display: flex; gap: 10px; margin: 0 14px 16px; }
+  .maptools .btn { margin-top: 0; }
+  .notice {
+    margin: 0 14px 12px; padding: 12px 14px;
+    background: var(--flag-bg); color: var(--flag);
+    border-radius: 6px; font-size: 14px; font-weight: 600; line-height: 1.4;
+  }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<script src="leaflet.js"></script>
+
+<div id="app"></div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   1. THE DATA
+
+   Two sources, merged into one list:
+
+     BUNDLED  — points.json, sitting next to this file. The Python
+                script writes it. Loaded once at start-up and then
+                held in memory; nothing is fetched again after that.
+     MINE     — points you save yourself, kept in localStorage,
+                which is a small permanent store inside the browser
+                that survives closing the app.
+
+   If points.json can't be read (for example when you open this file
+   straight off the disk with a file:// address, which browsers block
+   for security), the app falls back to the twelve sample records
+   below so it still runs.
+   ============================================================ */
+
+var SAMPLE_POINTS = [
+  { id:"s1",  name:"Sample point — Seymour",     type:"dump",  lat:-37.0270, lon:145.1390, fee:"Free",    access:"Behind the public toilets",      potable:null },
+  { id:"s2",  name:"Sample point — Nagambie",    type:"water", lat:-36.7910, lon:145.1530, fee:"Free",    access:"Tap on the north wall",          potable:true },
+  { id:"s3",  name:"Sample point — Euroa",       type:"dump",  lat:-36.7530, lon:145.5720, fee:"Free",    access:"Council depot, daylight hours",  potable:null },
+  { id:"s4",  name:"Sample point — Violet Town", type:"water", lat:-36.6390, lon:145.7180, fee:"Free",    access:"Rest area, eastern end",         potable:true },
+  { id:"s5",  name:"Sample point — Benalla",     type:"dump",  lat:-36.5510, lon:145.9840, fee:"$5",      access:"Caravan park, ask at office",    potable:null },
+  { id:"s6",  name:"Sample point — Wangaratta",  type:"water", lat:-36.3580, lon:146.3120, fee:"Free",    access:"Standpipe by the showgrounds",   potable:true },
+  { id:"s7",  name:"Sample point — Glenrowan",   type:"dump",  lat:-36.4600, lon:146.2260, fee:"Free",    access:"Signposted off the service road",potable:null },
+  { id:"s8",  name:"Sample point — Bright",      type:"water", lat:-36.7290, lon:146.9600, fee:"Free",    access:"Riverside reserve",              potable:true },
+  { id:"s9",  name:"Sample point — Myrtleford",  type:"dump",  lat:-36.5610, lon:146.7250, fee:"Free",    access:"Rear of the sports ground",      potable:null },
+  { id:"s10", name:"Sample point — Yarrawonga",  type:"water", lat:-36.0130, lon:146.0000, fee:"Free",    access:"Foreshore, near boat ramp",      potable:false },
+  { id:"s11", name:"Sample point — Shepparton",  type:"dump",  lat:-36.3800, lon:145.4000, fee:"Free",    access:"Victoria Park Lake carpark",     potable:null },
+  { id:"s12", name:"Sample point — Echuca",      type:"water", lat:-36.1290, lon:144.7510, fee:"$2 coin", access:"Holiday park, gate 2",           potable:true }
+];
+
+var BUNDLED = SAMPLE_POINTS;     // replaced by points.json if it loads
+var USING_SAMPLE = true;
+
+/* ============================================================
+   2. MY POINTS — the local store
+
+   localStorage only holds text, so the whole array is converted to
+   JSON text on the way in and back to an array on the way out.
+   Everything is wrapped in try/catch: in iOS private browsing the
+   store can be unavailable, and a crash there would take the whole
+   app down for no good reason.
+   ============================================================ */
+
+var STORAGE_KEY = "dumpfinder.mypoints.v1";
+
+function loadMine() {
+  try {
+    var text = localStorage.getItem(STORAGE_KEY);
+    if (!text) return [];
+    var list = JSON.parse(text);
+    return Array.isArray(list) ? list.filter(isValidPoint) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveMine(list) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    return true;
+  } catch (e) {
+    return false;                // storage full, or blocked
+  }
+}
+
+/* A record has to have the essentials before we'll trust it — this
+   guards both the stored data and anything imported from a file. */
+function isValidPoint(p) {
+  return p && typeof p === "object"
+    && typeof p.lat === "number" && typeof p.lon === "number"
+    && p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180
+    && (p.type === "dump" || p.type === "water");
+}
+
+function newId() {
+  return "my-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);   // "2026-09-09"
+}
+
+/* Every point the app knows about, mine flagged so the list can mark them. */
+function allPoints() {
+  var mine = state.mine.map(function (p) {
+    var copy = {};
+    for (var k in p) copy[k] = p[k];
+    copy.mine = true;
+    return copy;
+  });
+  return mine.concat(BUNDLED);
+}
+
+/* ============================================================
+   3. THE MATHS
+   ============================================================ */
+
+var EARTH_RADIUS_KM = 6371;
+
+function toRadians(degrees) {
+  return degrees * Math.PI / 180;
+}
+
+/* Haversine: great-circle distance between two lat/lon pairs, in km.
+   Straight line over the ground, not road distance. */
+function distanceKm(lat1, lon1, lat2, lon2) {
+  var dLat = toRadians(lat2 - lat1);
+  var dLon = toRadians(lon2 - lon1);
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+        + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2))
+        * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/* Initial bearing from point 1 to point 2, in degrees clockwise from north. */
+function bearingDegrees(lat1, lon1, lat2, lon2) {
+  var p1 = toRadians(lat1), p2 = toRadians(lat2);
+  var dLon = toRadians(lon2 - lon1);
+  var y = Math.sin(dLon) * Math.cos(p2);
+  var x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+var COMPASS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+
+function compassLabel(degrees) {
+  return COMPASS[Math.round(degrees / 22.5) % 16];
+}
+
+function formatDistance(km) {
+  if (km < 1)   return { value: Math.round(km * 1000), unit: "m"  };
+  if (km < 10)  return { value: km.toFixed(1),         unit: "km" };
+  return              { value: Math.round(km),         unit: "km" };
+}
+
+/* ============================================================
+   4. STATE
+
+   One object holding everything that can change. Every screen is
+   drawn from this and nothing else, so to change what's on screen
+   you change state and call render().
+   ============================================================ */
+
+var state = {
+  position: null,        // { lat, lon, source: "gps" | "manual" }
+  filter: "both",        // "dump" | "water" | "both"
+  mode: "list",          // "list" | "map" — how results are shown
+  view: "list",          // "list" | "detail" | "add"
+  selectedId: null,
+  locating: true,
+  locationError: null,
+  manualError: null,
+  formError: null,
+  formType: "dump",      // which type the add-a-point form has selected
+  pendingPos: null,      // the fix captured when Save this spot was tapped
+  mine: [],
+  flash: null            // one-line confirmation shown at the top
+};
+
+function nearbyPoints() {
+  if (!state.position) return [];
+  var here = state.position;
+
+  var visible = allPoints().filter(function (p) {
+    return state.filter === "both" || p.type === state.filter;
+  });
+
+  var measured = visible.map(function (p) {
+    var km = distanceKm(here.lat, here.lon, p.lat, p.lon);
+    var deg = bearingDegrees(here.lat, here.lon, p.lat, p.lon);
+    return { point: p, km: km, deg: deg, compass: compassLabel(deg) };
+  });
+
+  measured.sort(function (a, b) { return a.km - b.km; });
+  return measured;
+}
+
+/* ============================================================
+   5. LOCATION
+   ============================================================ */
+
+function requestGPS() {
+  state.locating = true;
+  state.locationError = null;
+  render();
+
+  if (!navigator.geolocation) {
+    state.locating = false;
+    state.locationError = "This browser has no location support. Enter coordinates below.";
+    render();
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      state.position = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        source: "gps"
+      };
+      state.locating = false;
+      render();
+    },
+    function (err) {
+      state.locating = false;
+      state.locationError = err.code === 1
+        ? "Location permission was declined. Enter coordinates below, or allow location and try again."
+        : "Couldn't get a GPS fix. Move somewhere with a clear view of the sky, or enter coordinates below.";
+      render();
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+  );
+}
+
+/* Accepts "-36.75, 145.57" or "-36.75 145.57" */
+function parseCoordinates(text) {
+  var parts = String(text).trim().split(/[,\s]+/);
+  if (parts.length !== 2) return null;
+  var lat = parseFloat(parts[0]), lon = parseFloat(parts[1]);
+  if (isNaN(lat) || isNaN(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat: lat, lon: lon, source: "manual" };
+}
+
+/* ============================================================
+   6. RENDERING
+
+   render() throws away the whole screen and rebuilds it from state,
+   then re-attaches the button handlers. Crude, but with a few dozen
+   rows it's instant, and it means there is only ever one place where
+   the screen is decided.
+   ============================================================ */
+
+var app = document.getElementById("app");
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c];
+  });
+}
+
+function typeLabel(t, short) {
+  if (t === "dump") return short ? "Dump" : "Dump point";
+  return short ? "Water" : "Water";
+}
+
+function tagsFor(p, short) {
+  var html = '<span class="tag ' + p.type + '">' + typeLabel(p.type, short) + '</span>';
+  if (p.mine) html += '<span class="tag mine">Mine</span>';
+  return html;
+}
+
+function render() {
+  if (state.view === "detail") app.innerHTML = detailView();
+  else if (state.view === "add") app.innerHTML = addView();
+  else app.innerHTML = listView();
+  wireUp();
+  if (state.view === "list" && state.mode === "map") mountMap();
+}
+
+function flashStrip() {
+  if (!state.flash) return "";
+  return '<div class="flag">' + escapeHtml(state.flash) + '</div>';
+}
+
+function sourceStrip() {
+  if (USING_SAMPLE) {
+    return '<div class="flag">Sample data — ' + BUNDLED.length
+      + ' placeholder points. Run fetch_points.py to load the real OpenStreetMap set.</div>';
+  }
+  return '<div class="flag ok">' + BUNDLED.length.toLocaleString() + ' bundled points'
+    + (state.mine.length ? ' + ' + state.mine.length + ' of yours' : '') + '</div>';
+}
+
+function listView() {
+  var results = nearbyPoints();
+  var html = flashStrip() + sourceStrip();
+
+  html += '<div class="filter">'
+    + filterButton("dump", "Dump")
+    + filterButton("water", "Water")
+    + filterButton("both", "Both")
+    + '</div>';
+
+  if (mapAvailable()) {
+    html += '<div class="filter" style="padding-top:0">'
+      + '<button data-mode="list" aria-pressed="' + (state.mode === "list") + '">List</button>'
+      + '<button data-mode="map" aria-pressed="' + (state.mode === "map") + '">Map</button>'
+      + '</div>';
+  }
+
+  if (state.locating) {
+    html += '<div class="panel"><h2>Finding you</h2><p>Waiting on a GPS fix.</p></div>';
+    return html;
+  }
+
+  if (!state.position) {
+    return html + manualPanel(state.locationError) + myPointsPanel();
+  }
+
+  if (results.length === 0) {
+    html += '<div class="panel"><h2>Nothing in this category</h2>'
+      + '<p>Switch the filter to Both, or add a point of your own.</p></div>';
+  } else if (state.mode === "map") {
+    html += mapSection();
+    html += '<div class="list">';
+    results.slice(0, 8).forEach(function (r) {
+      var rd = formatDistance(r.km);
+      html += '<button class="row" data-id="' + escapeHtml(r.point.id) + '">'
+        + '<span class="d num">' + rd.value + '<small> ' + rd.unit + '</small></span>'
+        + '<span class="b">' + r.compass + '</span>'
+        + '<span class="n">' + escapeHtml(r.point.name)
+        + '<br>' + tagsFor(r.point, true)
+        + '</span></button>';
+    });
+    html += '</div>';
+  } else {
+    var first = results[0];
+    var d = formatDistance(first.km);
+    html += '<button class="hero" data-id="' + first.point.id + '">'
+      + '<div class="compass"><div class="needle" style="transform: rotate(' + first.deg.toFixed(0) + 'deg)"></div></div>'
+      + '<div class="hero-body">'
+      + '<span class="dist num">' + d.value + '<small> ' + d.unit + '</small></span>'
+      + '<span class="bearing">' + first.compass + '</span>'
+      + '<div class="name">' + escapeHtml(first.point.name) + '<br>'
+      + tagsFor(first.point, false)
+      + '</div></div></button>';
+
+    if (results.length > 1) {
+      html += '<div class="list">';
+      results.slice(1, 15).forEach(function (r) {
+        var rd = formatDistance(r.km);
+        html += '<button class="row" data-id="' + escapeHtml(r.point.id) + '">'
+          + '<span class="d num">' + rd.value + '<small> ' + rd.unit + '</small></span>'
+          + '<span class="b">' + r.compass + '</span>'
+          + '<span class="n">' + escapeHtml(r.point.name)
+          + '<br>' + tagsFor(r.point, true)
+          + '</span></button>';
+      });
+      html += '</div>';
+    }
+  }
+
+  html += '<div class="loc">'
+    + (state.position.source === "gps" ? "Using GPS position " : "Using coordinates you entered ")
+    + '<span class="num">' + state.position.lat.toFixed(4) + ', ' + state.position.lon.toFixed(4) + '</span><br>'
+    + '<button id="relocate">Update position</button></div>';
+
+  html += '<div class="actions">'
+    + '<button class="btn" id="addHere">Save this spot as a point</button>'
+    + '</div>';
+
+  return html + myPointsPanel();
+}
+
+function filterButton(value, label) {
+  return '<button data-filter="' + value + '" aria-pressed="'
+    + (state.filter === value) + '">' + label + '</button>';
+}
+
+function manualPanel(message) {
+  return '<div class="panel">'
+    + '<h2>Set your position</h2>'
+    + '<p>' + escapeHtml(message || "Enter latitude and longitude, separated by a comma.") + '</p>'
+    + '<input id="coords" type="text" inputmode="text" placeholder="-36.7530, 145.5720" autocomplete="off">'
+    + (state.manualError ? '<div class="err">' + escapeHtml(state.manualError) + '</div>' : '')
+    + '<button class="btn" id="useCoords">Use these coordinates</button>'
+    + '<button class="btn secondary" id="tryGps">Try GPS again</button>'
+    + '</div>';
+}
+
+/* Export / import lives at the bottom of the list, out of the way. */
+function myPointsPanel() {
+  var n = state.mine.length;
+  return '<div class="panel">'
+    + '<h2>My points</h2>'
+    + '<p>' + (n === 0
+        ? "Nothing saved yet. Points you save are kept on this phone only."
+        : n + (n === 1 ? " point" : " points") + " saved on this phone.") + '</p>'
+    + '<div class="pair">'
+    + '<button class="btn secondary" id="exportMine"' + (n === 0 ? " disabled" : "") + '>Export</button>'
+    + '<button class="btn secondary" id="importBtn">Import</button>'
+    + '</div>'
+    + '<input type="file" id="importFile" accept=".json,application/json" class="hidden">'
+    + '</div>';
+}
+
+function addView() {
+  var p = state.pendingPos;
+  var html = '<div class="detail">';
+  html += '<button class="back" id="back">Cancel</button>';
+  html += '<h1>Save this spot</h1>';
+  html += '<div class="panel">';
+  html += '<p>Recording <span class="num">' + p.lat.toFixed(5) + ', ' + p.lon.toFixed(5) + '</span>'
+       + (p.source === "gps" ? " from GPS." : " as entered.") + '</p>';
+
+  html += '<label for="pname">Name</label>';
+  html += '<input id="pname" type="text" placeholder="Tap behind the shed" autocomplete="off">';
+
+  html += '<label>Type</label>';
+  html += '<div class="filter" style="padding:0">'
+    + '<button data-formtype="dump" aria-pressed="' + (state.formType === "dump") + '">Dump</button>'
+    + '<button data-formtype="water" aria-pressed="' + (state.formType === "water") + '">Water</button>'
+    + '</div>';
+
+  html += '<label for="pnote">Note</label>';
+  html += '<textarea id="pnote" placeholder="Gate code 1234. Hose is short — park close."></textarea>';
+
+  if (state.formError) html += '<div class="err">' + escapeHtml(state.formError) + '</div>';
+
+  html += '<button class="btn" id="savePoint">Save point</button>';
+  html += '</div></div>';
+  return html;
+}
+
+/* ============================================================
+   6b. THE MAP
+
+   Leaflet is a small mapping library. It lives in leaflet.js
+   rather than being fetched from the internet, so the map still
+   opens with the phone in flight mode — what needs a signal is the
+   map *tiles*, the little square photographs of the ground that get
+   stitched together to make the picture.
+
+   Tiles you have already looked at are stored by the service worker,
+   so a region you browsed at home is still there in the bush. If a
+   tile is missing and there is no signal, the map draws the points
+   on a blank background with distance rings instead, which is still
+   perfectly usable — you can see what is north of you and how far.
+
+   One wrinkle worth understanding: render() rebuilds the whole
+   screen by throwing away its HTML, which would destroy the map
+   every time you touched a filter. So the map's container is made
+   once and kept in a variable, and each render simply moves that
+   same element into the new screen. The map never notices.
+   ============================================================ */
+
+var mapHost = null;      // the div Leaflet draws into. Made once, moved about.
+var leafletMap = null;   // the Leaflet map itself
+var markerLayer = null;  // a group holding every dot, so they clear in one go
+var ringLayer = null;    // distance rings, only drawn when tiles are missing
+var tilesFailed = false;
+var mapPlaced = false;   // have we framed the view yet?
+
+var MAX_MARKERS = 200;   // plotting ten thousand dots would crawl
+
+function mapAvailable() {
+  return typeof L !== "undefined";
+}
+
+/* Reads a colour out of the stylesheet so the map and the list can
+   never drift apart. */
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function pointColour(p) {
+  if (p.mine) return cssVar("--mine");
+  return cssVar(p.type === "dump" ? "--dump" : "--water");
+}
+
+function initMap() {
+  leafletMap = L.map(mapHost, {
+    zoomControl: true,
+    attributionControl: true,
+    tap: true
+  });
+
+  var tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 17,
+    attribution: '&copy; OpenStreetMap contributors'
+  });
+
+  // Fired when a tile can't be fetched — offline, or never cached.
+  tiles.on("tileerror", function () {
+    if (tilesFailed) return;
+    tilesFailed = true;
+    drawRings();
+    render();
+  });
+
+  tiles.addTo(leafletMap);
+  markerLayer = L.layerGroup().addTo(leafletMap);
+  ringLayer = L.layerGroup().addTo(leafletMap);
+}
+
+/* Rings at fixed distances, so a tile-less map still says "how far". */
+function drawRings() {
+  if (!ringLayer || !state.position) return;
+  ringLayer.clearLayers();
+  var here = [state.position.lat, state.position.lon];
+  [5, 25, 100].forEach(function (km) {
+    L.circle(here, {
+      radius: km * 1000,
+      color: cssVar("--rule"),
+      weight: 1,
+      fill: false,
+      interactive: false
+    }).addTo(ringLayer);
+  });
+}
+
+function refreshMarkers() {
+  if (!markerLayer || !state.position) return;
+  markerLayer.clearLayers();
+
+  var results = nearbyPoints().slice(0, MAX_MARKERS);
+
+  results.forEach(function (r) {
+    var marker = L.circleMarker([r.point.lat, r.point.lon], {
+      radius: 8,
+      color: "#fff",
+      weight: 2,
+      fillColor: pointColour(r.point),
+      fillOpacity: 1
+    });
+    marker.bindTooltip(r.point.name);
+    marker.on("click", function () {
+      state.selectedId = r.point.id;
+      state.view = "detail";
+      state.flash = null;
+      window.scrollTo(0, 0);
+      render();
+    });
+    marker.addTo(markerLayer);
+  });
+
+  // You, drawn last so nothing sits on top of it.
+  L.circleMarker([state.position.lat, state.position.lon], {
+    radius: 6,
+    color: cssVar("--ink"),
+    weight: 3,
+    fillColor: "#fff",
+    fillOpacity: 1,
+    interactive: false
+  }).addTo(markerLayer);
+
+  if (!mapPlaced) { frameView(results); mapPlaced = true; }
+}
+
+/* Zoom and centre so you and the nearest handful are all on screen. */
+function frameView(results) {
+  if (!leafletMap || !state.position) return;
+  var here = [state.position.lat, state.position.lon];
+  var near = results.slice(0, 8).map(function (r) { return [r.point.lat, r.point.lon]; });
+
+  if (near.length === 0) {
+    leafletMap.setView(here, 11);
+    return;
+  }
+  leafletMap.fitBounds(L.latLngBounds(near.concat([here])).pad(0.15), { maxZoom: 14 });
+}
+
+/* Called after every render: puts the one map element into the new screen. */
+function mountMap() {
+  var slot = app.querySelector("#mapSlot");
+  if (!slot || !mapAvailable()) return;
+
+  if (!mapHost) {
+    mapHost = document.createElement("div");
+    mapHost.id = "map";
+  }
+  slot.appendChild(mapHost);
+
+  if (!leafletMap) initMap();
+  else leafletMap.invalidateSize();
+
+  if (tilesFailed) drawRings();
+  refreshMarkers();
+}
+
+function mapSection() {
+  var html = "";
+  if (tilesFailed) {
+    html += '<div class="notice">No map tiles for this area — showing positions '
+         + 'and distance rings only. Tiles fill in whenever you have signal.</div>';
+  }
+  html += '<div class="mapslot" id="mapSlot"></div>';
+  html += '<div class="maptools">'
+       + '<button class="btn secondary" id="recentre">Centre on me</button>'
+       + '</div>';
+  return html;
+}
+
+function detailView() {
+  var found = nearbyPoints().filter(function (r) { return r.point.id === state.selectedId; })[0];
+  if (!found) { state.view = "list"; state.selectedId = null; return listView(); }
+
+  var p = found.point;
+  var d = formatDistance(found.km);
+  var potable = p.potable === true ? "Yes"
+              : p.potable === false ? "No — not for drinking"
+              : "Unknown";
+
+  var html = '<div class="detail">';
+  html += '<button class="back" id="back">Back to list</button>';
+  html += '<h1>' + escapeHtml(p.name) + '</h1>';
+  html += tagsFor(p, false);
+  html += '<dl>';
+  html += '<dt>Distance and bearing</dt><dd class="num">' + d.value + ' ' + d.unit
+       + ' &middot; ' + found.compass + ' (' + found.deg.toFixed(0) + '&deg;)</dd>';
+  if (p.type === "water") html += '<dt>Drinkable</dt><dd>' + potable + '</dd>';
+  html += '<dt>Cost</dt><dd>' + escapeHtml(p.fee || "Unknown") + '</dd>';
+  html += '<dt>Getting in</dt><dd>' + escapeHtml(p.access || "No notes") + '</dd>';
+  if (p.verified) html += '<dt>Last verified</dt><dd class="num">' + escapeHtml(p.verified) + '</dd>';
+  html += '<dt>Coordinates</dt><dd class="num">' + p.lat.toFixed(5) + ', ' + p.lon.toFixed(5) + '</dd>';
+  html += '</dl>';
+
+  html += '<button class="btn" id="copy" data-coords="' + p.lat.toFixed(5) + ', ' + p.lon.toFixed(5) + '">Copy coordinates</button>';
+  html += '<a class="btn secondary" href="https://maps.apple.com/?daddr=' + p.lat + ',' + p.lon + '&dirflg=d">Open in Maps</a>';
+  if (p.mine) {
+    html += '<button class="btn danger" id="deletePoint" data-id="' + escapeHtml(p.id) + '">Delete this point</button>';
+  }
+  html += '<p class="note">Distance is straight line, not road distance. Maps needs signal — the link will work once you are back in range.</p>';
+  html += '</div>';
+  return html;
+}
+
+/* ============================================================
+   7. EXPORT AND IMPORT
+
+   Export builds a file in memory and hands it either to the iOS
+   share sheet (so it can go to Files, Messages, AirDrop) or to a
+   plain download link as a fallback.
+   ============================================================ */
+
+function exportMine() {
+  if (state.mine.length === 0) return;
+
+  var payload = {
+    format: "dumpfinder-points",
+    version: 1,
+    exported: today(),
+    points: state.mine
+  };
+  var text = JSON.stringify(payload, null, 1);
+  var filename = "my-points-" + today() + ".json";
+  var file = new File([text], filename, { type: "application/json" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file], title: "My dump and water points" })
+      .catch(function () { downloadFile(text, filename); });
+  } else {
+    downloadFile(text, filename);
+  }
+}
+
+function downloadFile(text, filename) {
+  var blob = new Blob([text], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+function importFrom(text) {
+  var parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    state.flash = "That file isn't readable as JSON.";
+    return;
+  }
+
+  // Accept either the wrapper we export, or a bare array of points.
+  var incoming = Array.isArray(parsed) ? parsed
+               : (parsed && Array.isArray(parsed.points)) ? parsed.points
+               : null;
+
+  if (!incoming) {
+    state.flash = "That file doesn't contain any points.";
+    return;
+  }
+
+  var existingIds = {};
+  state.mine.forEach(function (p) { existingIds[p.id] = true; });
+
+  var added = 0, skipped = 0;
+  incoming.forEach(function (p) {
+    if (!isValidPoint(p)) { skipped++; return; }
+    if (p.id && existingIds[p.id]) { skipped++; return; }
+    var record = {
+      id: p.id || newId(),
+      name: p.name || "Imported point",
+      type: p.type,
+      lat: p.lat,
+      lon: p.lon,
+      potable: (p.potable === true || p.potable === false) ? p.potable : null,
+      fee: p.fee || "",
+      access: p.access || "",
+      verified: p.verified || ""
+    };
+    existingIds[record.id] = true;
+    state.mine.push(record);
+    added++;
+  });
+
+  saveMine(state.mine);
+  state.flash = "Imported " + added + (added === 1 ? " point" : " points")
+    + (skipped ? ", skipped " + skipped + " already there or unreadable." : ".");
+}
+
+/* ============================================================
+   8. EVENTS
+   ============================================================ */
+
+function wireUp() {
+  Array.prototype.forEach.call(app.querySelectorAll("[data-filter]"), function (b) {
+    b.onclick = function () { state.filter = b.getAttribute("data-filter"); state.flash = null; render(); };
+  });
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
+    b.onclick = function () {
+      // Keep what's already typed before the screen is rebuilt.
+      state.draftName = app.querySelector("#pname").value;
+      state.draftNote = app.querySelector("#pnote").value;
+      state.formType = b.getAttribute("data-formtype");
+      render();
+      app.querySelector("#pname").value = state.draftName || "";
+      app.querySelector("#pnote").value = state.draftNote || "";
+    };
+  });
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-id]"), function (b) {
+    if (b.id === "deletePoint") return;
+    b.onclick = function () {
+      state.selectedId = b.getAttribute("data-id");
+      state.view = "detail";
+      state.flash = null;
+      window.scrollTo(0, 0);
+      render();
+    };
+  });
+
+  var back = app.querySelector("#back");
+  if (back) back.onclick = function () {
+    state.view = "list";
+    state.selectedId = null;
+    state.formError = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-mode]"), function (b) {
+    b.onclick = function () {
+      state.mode = b.getAttribute("data-mode");
+      state.flash = null;
+      render();
+    };
+  });
+
+  var recentre = app.querySelector("#recentre");
+  if (recentre) recentre.onclick = function () {
+    frameView(nearbyPoints().slice(0, MAX_MARKERS));
+  };
+
+  var relocate = app.querySelector("#relocate");
+  if (relocate) relocate.onclick = requestGPS;
+
+  var tryGps = app.querySelector("#tryGps");
+  if (tryGps) tryGps.onclick = requestGPS;
+
+  var use = app.querySelector("#useCoords");
+  if (use) use.onclick = function () {
+    var parsed = parseCoordinates(app.querySelector("#coords").value);
+    if (!parsed) {
+      state.manualError = "That didn't read as a coordinate pair. Try: -36.7530, 145.5720";
+    } else {
+      state.manualError = null;
+      state.position = parsed;
+      state.locationError = null;
+    }
+    render();
+  };
+
+  var copy = app.querySelector("#copy");
+  if (copy) copy.onclick = function () {
+    var text = copy.getAttribute("data-coords");
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { copy.textContent = "Copied"; });
+    } else {
+      copy.textContent = text;
+    }
+  };
+
+  var addHere = app.querySelector("#addHere");
+  if (addHere) addHere.onclick = function () {
+    state.pendingPos = state.position;
+    state.formType = "dump";
+    state.formError = null;
+    state.draftName = "";
+    state.draftNote = "";
+    state.view = "add";
+    state.flash = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var savePoint = app.querySelector("#savePoint");
+  if (savePoint) savePoint.onclick = function () {
+    var name = app.querySelector("#pname").value.trim();
+    var note = app.querySelector("#pnote").value.trim();
+    if (!name) {
+      state.formError = "Give it a name so you can find it again.";
+      state.draftNote = note;
+      render();
+      app.querySelector("#pnote").value = note;
+      return;
+    }
+    var record = {
+      id: newId(),
+      name: name,
+      type: state.formType,
+      lat: state.pendingPos.lat,
+      lon: state.pendingPos.lon,
+      potable: null,
+      fee: "",
+      access: note,
+      verified: today()
+    };
+    state.mine.push(record);
+    if (!saveMine(state.mine)) {
+      state.mine.pop();
+      state.formError = "Couldn't save — the browser's storage is full or blocked.";
+      render();
+      return;
+    }
+    state.view = "list";
+    state.flash = "Saved " + name + ".";
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var del = app.querySelector("#deletePoint");
+  if (del) del.onclick = function () {
+    var id = del.getAttribute("data-id");
+    if (!window.confirm("Delete this point? It can't be undone.")) return;
+    state.mine = state.mine.filter(function (p) { return p.id !== id; });
+    saveMine(state.mine);
+    state.view = "list";
+    state.selectedId = null;
+    state.flash = "Point deleted.";
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var exportBtn = app.querySelector("#exportMine");
+  if (exportBtn) exportBtn.onclick = exportMine;
+
+  var importBtn = app.querySelector("#importBtn");
+  var importFile = app.querySelector("#importFile");
+  if (importBtn && importFile) {
+    importBtn.onclick = function () { importFile.click(); };
+    importFile.onchange = function () {
+      var f = importFile.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        importFrom(reader.result);
+        window.scrollTo(0, 0);
+        render();
+      };
+      reader.onerror = function () { state.flash = "Couldn't read that file."; render(); };
+      reader.readAsText(f);
+    };
+  }
+}
+
+/* ============================================================
+   9. START UP
+   ============================================================ */
+
+/* Pull in points.json once. Everything after this runs from memory,
+   so the app never touches the network again while you're using it. */
+function loadBundled() {
+  // No cache hints here on purpose: the service worker is what makes this
+  // work offline, and asking the browser's own cache to force a hit can
+  // pin an old failure in place.
+  return fetch("points.json")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (Array.isArray(data) && data.length) {
+        BUNDLED = data.filter(isValidPoint);
+        USING_SAMPLE = false;
+      }
+    })
+    .catch(function () { /* keep the samples */ });
+}
+
+/* The service worker is what makes this work in flight mode. It needs
+   a real web address (https, or localhost) — opening the file directly
+   off the disk won't register one, which is fine for testing. */
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  if (location.protocol !== "https:" && location.hostname !== "localhost") return;
+  navigator.serviceWorker.register("sw.js").catch(function () { /* not fatal */ });
+}
+
+state.mine = loadMine();
+render();
+loadBundled().then(function () { render(); });
+requestGPS();
+registerServiceWorker();
+</script>
+</body>
+</html>
