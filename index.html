@@ -6,12 +6,12 @@
 <meta name="theme-color" content="#D9DBD2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Dump &amp; Water">
+<meta name="apple-mobile-web-app-title" content="Yobo Trip">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="leaflet.css">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<title>Dump &amp; Water</title>
+<title>Yobo Trip</title>
 <style>
   :root {
     --bg: #D9DBD2;
@@ -388,7 +388,7 @@
     <path d="M16 5 L20 18 L16 15.5 L12 18 Z" fill="currentColor"/>
     <path d="M16 27 L12 14 L16 16.5 L20 14 Z" fill="currentColor" opacity=".35"/>
   </svg>
-  <h1>Dump &amp; Water</h1>
+  <h1>Yobo Trip</h1>
   <span class="count" id="pointCount"></span>
 </header>
 
@@ -463,6 +463,9 @@ var USING_SAMPLE = true;
    app down for no good reason.
    ============================================================ */
 
+/* These two keys keep the old name on purpose. They are where your saved
+   points and your chosen categories live on the phone; renaming them would
+   look like a tidy-up and would in fact throw the lot away. */
 var STORAGE_KEY = "dumpfinder.mypoints.v1";
 var TYPES_KEY = "dumpfinder.types.v1";
 
@@ -1229,13 +1232,13 @@ function exportMine() {
   if (state.mine.length === 0) return;
 
   var payload = {
-    format: "dumpfinder-points",
+    format: "yobo-trip-points",
     version: 1,
     exported: today(),
     points: state.mine
   };
   var text = JSON.stringify(payload, null, 1);
-  var filename = "my-points-" + today() + ".json";
+  var filename = "yobo-trip-points-" + today() + ".json";
   var file = new File([text], filename, { type: "application/json" });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {

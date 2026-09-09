@@ -23,7 +23,9 @@
  * exactly what you don't want after an update.
  */
 
-var CACHE_NAME = "dumpfinder-v8";
+/* The app's own files. Bump this number after any change to them, or an
+   already-installed phone will keep serving its stored copy for ever. */
+var CACHE_NAME = "yobotrip-v9";
 
 /* The files the app cannot run without. If any one of these fails to
    download, the whole install fails and the old version stays put —
@@ -43,7 +45,7 @@ var CORE_FILES = [
    accumulate as you look around, and they must survive an app update —
    so they are kept apart from the versioned cache above and never
    deleted when the version number changes. */
-var TILE_CACHE = "dumpfinder-tiles";
+var TILE_CACHE = "yobotrip-tiles";
 var TILE_HOSTS = ["tile.openstreetmap.org"];
 var MAX_TILES = 3000;          // roughly 150 MB at worst; usually far less
 
@@ -73,8 +75,12 @@ self.addEventListener("activate", function (event) {
   event.waitUntil(
     caches.keys().then(function (names) {
       return Promise.all(names.map(function (name) {
-        // Anything from an older version number gets deleted.
-        return name === CACHE_NAME ? null : caches.delete(name);
+        // Anything from an older version number gets deleted — but not the
+        // map tiles. Those are not part of the app, they are expensive to
+        // collect, and throwing them away on every update would undo exactly
+        // the thing that makes the map work out of range.
+        if (name === CACHE_NAME || name === TILE_CACHE) return null;
+        return caches.delete(name);
       }));
     }).then(function () {
       return self.clients.claim();

@@ -1,7 +1,7 @@
 {
-  "name": "Dump & Water Finder",
-  "short_name": "Dump & Water",
-  "description": "Offline finder for caravan dump points and drinking water fill points.",
+  "name": "Yobo Trip",
+  "short_name": "Yobo Trip",
+  "description": "Offline finder for dump points, water, camps, fuel, pubs and shops on the road.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
