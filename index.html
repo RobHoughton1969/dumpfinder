@@ -1340,7 +1340,13 @@ function frameView(results) {
     leafletMap.setView(here, 11);
     return;
   }
+
   leafletMap.fitBounds(L.latLngBounds(near.concat([here])).pad(0.15), { maxZoom: 14 });
+
+  // Belt and braces. If the map still has no usable size, fitBounds gives a
+  // nonsense result — zoomed all the way out to the whole world. Better a
+  // sensible guess centred on you than a picture of the Pacific.
+  if (leafletMap.getZoom() < 3) leafletMap.setView(here, 11);
 }
 
 /* Called after every render: puts the one map element into the new screen. */
@@ -1355,7 +1361,13 @@ function mountMap() {
   slot.appendChild(mapHost);
 
   if (!leafletMap) initMap();
-  else leafletMap.invalidateSize();
+
+  // Always, not just when re-mounting. Leaflet measures its container when
+  // it is created, and on a cold start in map mode that happens before the
+  // browser has finished laying the page out — so it reads zero by zero,
+  // and any attempt to frame a view then collapses to zoom 0 and a picture
+  // of the whole planet. invalidateSize makes it measure again.
+  leafletMap.invalidateSize();
 
   if (tilesFailed) drawRings();
 

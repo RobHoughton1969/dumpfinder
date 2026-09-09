@@ -25,7 +25,7 @@
 
 /* The app's own files. Bump this number after any change to them, or an
    already-installed phone will keep serving its stored copy for ever. */
-var CACHE_NAME = "yobotrip-v13";
+var CACHE_NAME = "yobotrip-v14";
 
 /* The files the app cannot run without. If any one of these fails to
    download, the whole install fails and the old version stays put —
