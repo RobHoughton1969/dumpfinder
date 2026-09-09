@@ -390,7 +390,35 @@
     border-radius: 6px; font-size: 14px; font-weight: 600; line-height: 1.4;
   }
 
+  /* ---- photos ---- */
+  .shots { display: grid; gap: 12px; margin-top: 16px; }
+  .shot {
+    background: var(--surface); border-radius: 8px; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
+  }
+  .shot img { display: block; width: 100%; height: auto; background: var(--rule); }
+  img.pending {
+    display: block; width: 100%; height: auto;
+    border-radius: 6px; margin-bottom: 4px; background: var(--rule);
+  }
+
+  .shot .cap {
+    padding: 12px 14px; font-size: 15px; line-height: 1.45;
+  }
+  .shot .meta {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px 12px;
+    font-size: 13px; font-weight: 600; color: var(--ink-soft);
+  }
+  .shot .meta button {
+    margin-left: auto;
+    background: none; border: none; padding: 6px 2px;
+    font: inherit; font-size: 13px; font-weight: 700;
+    color: var(--dump); text-decoration: underline; cursor: pointer;
+  }
+
   .hidden { display: none; }
+
 </style>
 </head>
 <body>
@@ -542,7 +570,13 @@ function newId() {
 }
 
 function today() {
-  return new Date().toISOString().slice(0, 10);   // "2026-09-09"
+  // Deliberately not toISOString(): that reports UTC, and Australia is ten
+  // hours ahead of it. For most of an Australian day UTC is still on
+  // yesterday's date, so anything stamped that way is a day out. Read the
+  // local clock instead.
+  var d = new Date();
+  var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
 }
 
 /* Every point the app knows about, mine flagged so the list can mark them. */
@@ -557,7 +591,145 @@ function allPoints() {
 }
 
 /* ============================================================
+   2b. PHOTOS
+
+   Photos are far too big for localStorage, which tops out around five
+   megabytes for everything put together. So they live in IndexedDB — a
+   proper database built into the browser, on the phone, holding whole
+   files rather than just text.
+
+   Two things worth knowing:
+
+   Every photo is shrunk before it is stored. A picture straight off an
+   iPhone camera is around four megabytes; at 1280 pixels wide it is nearer
+   two hundred kilobytes, which is still far more detail than you need to
+   recognise a gate. Storing the originals would fill the phone in a fortnight.
+
+   Nothing leaves the device. There is no server to send them to — the app
+   is a handful of files on a web host, with nothing behind it. Photos sit
+   in this browser, on this phone, and stay there.
+   ============================================================ */
+
+var PHOTO_DB = "yobotrip.photos";
+var PHOTO_STORE = "shots";
+var MAX_PHOTO_EDGE = 1280;      // pixels on the longest side
+var PHOTO_QUALITY = 0.7;        // JPEG quality: plenty for a landmark
+
+var photoDb = null;
+
+/* Opens the database, creating it the first time. IndexedDB works through
+   callbacks rather than plain return values, so this is wrapped in a Promise
+   to make the rest of the code readable. */
+function openPhotoDb() {
+  if (photoDb) return Promise.resolve(photoDb);
+
+  return new Promise(function (resolve, reject) {
+    if (!window.indexedDB) { reject(new Error("no IndexedDB")); return; }
+
+    var request = indexedDB.open(PHOTO_DB, 1);
+
+    // Fires only when the database is new, or its version number went up.
+    request.onupgradeneeded = function () {
+      var db = request.result;
+      if (!db.objectStoreNames.contains(PHOTO_STORE)) {
+        var store = db.createObjectStore(PHOTO_STORE, { keyPath: "id" });
+        // An index lets us ask "every photo for this point" without
+        // reading the whole store.
+        store.createIndex("pointId", "pointId", { unique: false });
+      }
+    };
+
+    request.onsuccess = function () { photoDb = request.result; resolve(photoDb); };
+    request.onerror = function () { reject(request.error); };
+  });
+}
+
+function photosFor(pointId) {
+  return openPhotoDb().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction(PHOTO_STORE, "readonly");
+      var index = tx.objectStore(PHOTO_STORE).index("pointId");
+      var request = index.getAll(pointId);
+      request.onsuccess = function () {
+        var list = request.result || [];
+        list.sort(function (a, b) { return a.taken < b.taken ? 1 : -1; });
+        resolve(list);
+      };
+      request.onerror = function () { reject(request.error); };
+    });
+  }).catch(function () { return []; });
+}
+
+function savePhoto(record) {
+  return openPhotoDb().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction(PHOTO_STORE, "readwrite");
+      tx.objectStore(PHOTO_STORE).put(record);
+      tx.oncomplete = function () { resolve(true); };
+      tx.onerror = function () { reject(tx.error); };
+    });
+  });
+}
+
+function deletePhoto(id) {
+  return openPhotoDb().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction(PHOTO_STORE, "readwrite");
+      tx.objectStore(PHOTO_STORE).delete(id);
+      tx.oncomplete = function () { resolve(true); };
+      tx.onerror = function () { reject(tx.error); };
+    });
+  });
+}
+
+function countPhotos() {
+  return openPhotoDb().then(function (db) {
+    return new Promise(function (resolve) {
+      var tx = db.transaction(PHOTO_STORE, "readonly");
+      var request = tx.objectStore(PHOTO_STORE).count();
+      request.onsuccess = function () { resolve(request.result); };
+      request.onerror = function () { resolve(0); };
+    });
+  }).catch(function () { return 0; });
+}
+
+/* Draws the picture onto an off-screen canvas at a sensible size and reads
+   it back out as a much smaller JPEG. createImageBitmap does the decoding
+   without blocking the screen; older browsers fall back to an <img>. */
+function shrinkPhoto(file) {
+  return loadBitmap(file).then(function (bitmap) {
+    var scale = Math.min(1, MAX_PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+    var w = Math.round(bitmap.width * scale);
+    var h = Math.round(bitmap.height * scale);
+
+    var canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+
+    if (bitmap.close) bitmap.close();     // let go of the full-size copy
+
+    return new Promise(function (resolve) {
+      canvas.toBlob(function (blob) { resolve(blob); }, "image/jpeg", PHOTO_QUALITY);
+    });
+  });
+}
+
+function loadBitmap(file) {
+  if (window.createImageBitmap) return createImageBitmap(file);
+
+  return new Promise(function (resolve, reject) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+    img.src = url;
+  });
+}
+
+/* ============================================================
    3. THE MATHS
+
    ============================================================ */
 
 var EARTH_RADIUS_KM = 6371;
@@ -611,6 +783,9 @@ var state = {
   types: ["dump", "water"],   // which categories are switched on
   mode: "list",          // "list" | "map" — how results are shown
   filtersOpen: false,    // is the category picker folded out?
+  shots: [],             // photos for the point being looked at
+  photoBusy: false,      // a picture is being shrunk right now
+  pendingShot: null,     // a photo taken but not yet saved
   view: "list",          // "list" | "detail" | "add"
   selectedId: null,
   locating: true,
@@ -723,6 +898,7 @@ function render() {
   else app.innerHTML = listView();
   wireUp();
   updateCount();
+  if (state.view === "detail" && state.selectedId) showPhotos(state.selectedId);
   if (state.view === "list" && state.mode === "map") mountMap();
 }
 
@@ -738,6 +914,16 @@ function updateCount() {
   if (!el) return;
   el.textContent = BUNDLED.length.toLocaleString() + " places"
     + (state.mine.length ? " + " + state.mine.length + " yours" : "");
+
+  // The photo tally has to be fetched from the database, so it arrives a
+  // moment later and is written in when it does.
+  var line = document.getElementById("myPointsLine");
+  if (!line) return;
+  countPhotos().then(function (shots) {
+    if (shots === 0 || document.getElementById("myPointsLine") !== line) return;
+    line.textContent += " " + shots + (shots === 1 ? " photo" : " photos")
+      + " stored too.";
+  });
 }
 
 function sourceStrip() {
@@ -893,7 +1079,7 @@ function myPointsPanel() {
   var n = state.mine.length;
   return '<div class="panel">'
     + '<h2>My points</h2>'
-    + '<p>' + (n === 0
+    + '<p id="myPointsLine">' + (n === 0
         ? "Nothing saved yet. Points you save are kept on this phone only."
         : n + (n === 1 ? " point" : " points") + " saved on this phone.") + '</p>'
     + '<div class="pair">'
@@ -1223,7 +1409,7 @@ function detailView() {
       : "Not recorded — most servos carry unleaded and diesel") + '</dd>';
   }
   if (p.hours) html += '<dt>Opening hours</dt><dd>' + escapeHtml(p.hours) + '</dd>';
-  if (p.type === "dump" || p.type === "water" || p.type === "camp") {
+  if (p.type === "dump" || p.type === "water" || p.type === "camp" || p.type === "npcamp") {
     html += '<dt>Cost</dt><dd>' + escapeHtml(p.fee || "Unknown") + '</dd>';
   }
   html += '<dt>Getting in</dt><dd>' + escapeHtml(p.access || "No notes") + '</dd>';
@@ -1243,640 +1429,96 @@ function detailView() {
          + "landholder's permission on private ground. Check the rules for "
          + 'your state before you dig.</div>';
   }
+  html += photoSection(p);
   html += '<p class="note">Distance is straight line, not road distance. Maps needs signal — the link will work once you are back in range.</p>';
   html += '</div>';
   return html;
 }
 
-/* ============================================================
-   7. EXPORT AND IMPORT
+/* The photo block on a detail page: whatever you have already taken here,
+   and a button to add another.
 
-   Export builds a file in memory and hands it either to the iOS
-   share sheet (so it can go to Files, Messages, AirDrop) or to a
-   plain download link as a fallback.
-   ============================================================ */
+   The pictures themselves are drawn in afterwards by showPhotos(), because
+   turning a stored file into something an <img> can display is not something
+   that can be done while building a string of HTML. */
+function photoSection(p) {
+  var html = '<div class="shots" id="shots"></div>';
 
-function exportMine() {
-  if (state.mine.length === 0) return;
-
-  var payload = {
-    format: "yobo-trip-points",
-    version: 1,
-    exported: today(),
-    points: state.mine
-  };
-  var text = JSON.stringify(payload, null, 1);
-  var filename = "yobo-trip-points-" + today() + ".json";
-  var file = new File([text], filename, { type: "application/json" });
-
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file], title: "My dump and water points" })
-      .catch(function () { downloadFile(text, filename); });
-  } else {
-    downloadFile(text, filename);
-  }
-}
-
-function downloadFile(text, filename) {
-  var blob = new Blob([text], { type: "application/json" });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-}
-
-function importFrom(text) {
-  var parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (e) {
-    state.flash = "That file isn't readable as JSON.";
-    return;
+  // Once a picture has been taken it waits here, shown, until you have
+  // written a note and pressed Save. Nothing is stored before that, so
+  // backing out leaves nothing behind.
+  if (state.pendingShot) {
+    html += '<div class="panel" style="margin-left:0;margin-right:0">'
+      + '<h2>Add this photo</h2>'
+      + '<img class="pending" src="' + state.pendingShot.url + '" alt="The photo you just took">'
+      + '<label for="shotNote">Note (optional)</label>'
+      + '<textarea id="shotNote" placeholder="Tap is round the back. Gate code 1234."></textarea>'
+      + '<button class="btn" id="saveShot">Save photo</button>'
+      + '<button class="btn secondary" id="dropShot">Discard</button>'
+      + '</div>';
+    return html;
   }
 
-  // Accept either the wrapper we export, or a bare array of points.
-  var incoming = Array.isArray(parsed) ? parsed
-               : (parsed && Array.isArray(parsed.points)) ? parsed.points
-               : null;
-
-  if (!incoming) {
-    state.flash = "That file doesn't contain any points.";
-    return;
-  }
-
-  var existingIds = {};
-  state.mine.forEach(function (p) { existingIds[p.id] = true; });
-
-  var added = 0, skipped = 0;
-  incoming.forEach(function (p) {
-    if (!isValidPoint(p)) { skipped++; return; }
-    if (p.id && existingIds[p.id]) { skipped++; return; }
-    var record = {
-      id: p.id || newId(),
-      name: p.name || "Imported point",
-      type: p.type,
-      lat: p.lat,
-      lon: p.lon,
-      potable: (p.potable === true || p.potable === false) ? p.potable : null,
-      fee: p.fee || "",
-      access: p.access || "",
-      verified: p.verified || ""
-    };
-    existingIds[record.id] = true;
-    state.mine.push(record);
-    added++;
-  });
-
-  saveMine(state.mine);
-  state.flash = "Imported " + added + (added === 1 ? " point" : " points")
-    + (skipped ? ", skipped " + skipped + " already there or unreadable." : ".");
-}
-
-/* ============================================================
-   8. EVENTS
-   ============================================================ */
-
-function wireUp() {
-  var toggleFilters = app.querySelector("#toggleFilters");
-  if (toggleFilters) toggleFilters.onclick = function () {
-    state.filtersOpen = !state.filtersOpen;
-    state.flash = null;
-    render();
-  };
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-type]"), function (b) {
-    b.onclick = function () {
-      var id = b.getAttribute("data-type");
-      var at = state.types.indexOf(id);
-      // Tapping a chip that's on turns it off, and vice versa.
-      if (at === -1) state.types.push(id); else state.types.splice(at, 1);
-      saveTypes(state.types);
-      state.flash = null;
-      render();
-    };
-  });
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
-    b.onclick = function () {
-      // Keep what's already typed before the screen is rebuilt.
-      state.draftName = app.querySelector("#pname").value;
-      state.draftNote = app.querySelector("#pnote").value;
-      state.formType = b.getAttribute("data-formtype");
-      render();
-      app.querySelector("#pname").value = state.draftName || "";
-      app.querySelector("#pnote").value = state.draftNote || "";
-    };
-  });
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-id]"), function (b) {
-    if (b.id === "deletePoint") return;
-    b.onclick = function () {
-      state.selectedId = b.getAttribute("data-id");
-      state.view = "detail";
-      state.flash = null;
-      window.scrollTo(0, 0);
-      render();
-    };
-  });
-
-  var back = app.querySelector("#back");
-  if (back) back.onclick = function () {
-    state.view = "list";
-    state.selectedId = null;
-    state.formError = null;
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-mode]"), function (b) {
-    b.onclick = function () {
-      state.mode = b.getAttribute("data-mode");
-      state.flash = null;
-      render();
-    };
-  });
-
-  var recentre = app.querySelector("#recentre");
-  if (recentre) recentre.onclick = function () {
-    frameView(nearbyPoints());
-  };
-
-  var relocate = app.querySelector("#relocate");
-  if (relocate) relocate.onclick = requestGPS;
-
-  var tryGps = app.querySelector("#tryGps");
-  if (tryGps) tryGps.onclick = requestGPS;
-
-  var use = app.querySelector("#useCoords");
-  if (use) use.onclick = function () {
-    var parsed = parseCoordinates(app.querySelector("#coords").value);
-    if (!parsed) {
-      state.manualError = "That didn't read as a coordinate pair. Try: -36.7530, 145.5720";
-    } else {
-      state.manualError = null;
-      state.position = parsed;
-      state.locationError = null;
-    }
-    render();
-  };
-
-  var copy = app.querySelector("#copy");
-  if (copy) copy.onclick = function () {
-    var text = copy.getAttribute("data-coords");
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(function () { copy.textContent = "Copied"; });
-    } else {
-      copy.textContent = text;
-    }
-  };
-
-  var addHere = app.querySelector("#addHere");
-  if (addHere) addHere.onclick = function () {
-    state.pendingPos = state.position;
-    state.formType = "dump";
-    state.formError = null;
-    state.draftName = "";
-    state.draftNote = "";
-    state.view = "add";
-    state.flash = null;
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  var savePoint = app.querySelector("#savePoint");
-  if (savePoint) savePoint.onclick = function () {
-    var name = app.querySelector("#pname").value.trim();
-    var note = app.querySelector("#pnote").value.trim();
-    if (!name) {
-      state.formError = "Give it a name so you can find it again.";
-      state.draftNote = note;
-      render();
-      app.querySelector("#pnote").value = note;
-      return;
-    }
-    var record = {
-      id: newId(),
-      name: name,
-      type: state.formType,
-      lat: state.pendingPos.lat,
-      lon: state.pendingPos.lon,
-      potable: null,
-      fee: "",
-      access: note,
-      verified: today()
-    };
-    state.mine.push(record);
-    if (!saveMine(state.mine)) {
-      state.mine.pop();
-      state.formError = "Couldn't save — the browser's storage is full or blocked.";
-      render();
-      return;
-    }
-    state.view = "list";
-    state.flash = "Saved " + name + ".";
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  var del = app.querySelector("#deletePoint");
-  if (del) del.onclick = function () {
-    var id = del.getAttribute("data-id");
-    if (!window.confirm("Delete this point? It can't be undone.")) return;
-    state.mine = state.mine.filter(function (p) { return p.id !== id; });
-    saveMine(state.mine);
-    state.view = "list";
-    state.selectedId = null;
-    state.flash = "Point deleted.";
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  var exportBtn = app.querySelector("#exportMine");
-  if (exportBtn) exportBtn.onclick = exportMine;
-
-  var importBtn = app.querySelector("#importBtn");
-  var importFile = app.querySelector("#importFile");
-  if (importBtn && importFile) {
-    importBtn.onclick = function () { importFile.click(); };
-    importFile.onchange = function () {
-      var f = importFile.files[0];
-      if (!f) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        importFrom(reader.result);
-        window.scrollTo(0, 0);
-        render();
-      };
-      reader.onerror = function () { state.flash = "Couldn't read that file."; render(); };
-      reader.readAsText(f);
-    };
-  }
-}
-
-/* ============================================================
-   9. START UP
-   ============================================================ */
-
-/* Pull in points.json once. Everything after this runs from memory,
-   so the app never touches the network again while you're using it. */
-function loadBundled() {
-  // No cache hints here on purpose: the service worker is what makes this
-  // work offline, and asking the browser's own cache to force a hit can
-  // pin an old failure in place.
-  return fetch("points.json")
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (data) {
-      if (Array.isArray(data) && data.length) {
-        BUNDLED = data.filter(isValidPoint);
-        USING_SAMPLE = false;
-      }
-    })
-    .catch(function () { /* keep the samples */ });
-}
-
-/* The service worker is what makes this work in flight mode. It needs
-   a real web address (https, or localhost) — opening the file directly
-   off the disk won't register one, which is fine for testing. */
-function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) return;
-  if (location.protocol !== "https:" && location.hostname !== "localhost") return;
-  navigator.serviceWorker.register("sw.js").catch(function () { /* not fatal */ });
-}
-
-state.mine = loadMine();
-state.types = loadTypes(state.types);
-
-render();
-loadBundled().then(function () { render(); });
-requestGPS();
-registerServiceWorker();
-</script>
-</body>
-</html>
-s Right or '
-         + 'fossicking permit — in most states, and the landholder  html += '</div>';
+  html += '<input type="file" id="photoFile" accept="image/*" '
+       + 'capture="environment" class="hidden">';
+  html += '<button class="btn secondary" id="addPhoto"'
+       + (state.photoBusy ? " disabled" : "") + '>'
+       + (state.photoBusy ? "Working…" : "Add a photo") + '</button>';
+  html += '<p class="note">Photos stay on this phone. There is no server to '
+       + 'send them to — so they are yours alone, and they survive with no signal.</p>';
   return html;
 }
 
-/* ============================================================
-   7. EXPORT AND IMPORT
+/* Called after the detail page is on screen. Each stored photo is a file
+   sitting in the database; createObjectURL hands the browser a temporary
+   address it can load that file from. */
+function showPhotos(pointId) {
+  var host = document.getElementById("shots");
+  if (!host) return;
 
-   Export builds a file in memory and hands it either to the iOS
-   share sheet (so it can go to Files, Messages, AirDrop) or to a
-   plain download link as a fallback.
-   ============================================================ */
+  photosFor(pointId).then(function (list) {
+    if (document.getElementById("shots") !== host) return;   // moved on already
+    if (list.length === 0) { host.innerHTML = ""; return; }
 
-function exportMine() {
-  if (state.mine.length === 0) return;
+    host.innerHTML = "";
+    list.forEach(function (shot) {
+      var url = URL.createObjectURL(shot.blob);
 
-  var payload = {
-    format: "yobo-trip-points",
-    version: 1,
-    exported: today(),
-    points: state.mine
-  };
-  var text = JSON.stringify(payload, null, 1);
-  var filename = "yobo-trip-points-" + today() + ".json";
-  var file = new File([text], filename, { type: "application/json" });
+      var card = document.createElement("div");
+      card.className = "shot";
 
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file], title: "My dump and water points" })
-      .catch(function () { downloadFile(text, filename); });
-  } else {
-    downloadFile(text, filename);
-  }
-}
+      var img = document.createElement("img");
+      img.src = url;
+      img.alt = shot.comment || "Photo of this place";
+      img.loading = "lazy";
+      // Hand the memory back once the picture has been drawn.
+      img.onload = function () { URL.revokeObjectURL(url); };
+      card.appendChild(img);
 
-function downloadFile(text, filename) {
-  var blob = new Blob([text], { type: "application/json" });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-}
-
-function importFrom(text) {
-  var parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (e) {
-    state.flash = "That file isn't readable as JSON.";
-    return;
-  }
-
-  // Accept either the wrapper we export, or a bare array of points.
-  var incoming = Array.isArray(parsed) ? parsed
-               : (parsed && Array.isArray(parsed.points)) ? parsed.points
-               : null;
-
-  if (!incoming) {
-    state.flash = "That file doesn't contain any points.";
-    return;
-  }
-
-  var existingIds = {};
-  state.mine.forEach(function (p) { existingIds[p.id] = true; });
-
-  var added = 0, skipped = 0;
-  incoming.forEach(function (p) {
-    if (!isValidPoint(p)) { skipped++; return; }
-    if (p.id && existingIds[p.id]) { skipped++; return; }
-    var record = {
-      id: p.id || newId(),
-      name: p.name || "Imported point",
-      type: p.type,
-      lat: p.lat,
-      lon: p.lon,
-      potable: (p.potable === true || p.potable === false) ? p.potable : null,
-      fee: p.fee || "",
-      access: p.access || "",
-      verified: p.verified || ""
-    };
-    existingIds[record.id] = true;
-    state.mine.push(record);
-    added++;
-  });
-
-  saveMine(state.mine);
-  state.flash = "Imported " + added + (added === 1 ? " point" : " points")
-    + (skipped ? ", skipped " + skipped + " already there or unreadable." : ".");
-}
-
-/* ============================================================
-   8. EVENTS
-   ============================================================ */
-
-function wireUp() {
-  var toggleFilters = app.querySelector("#toggleFilters");
-  if (toggleFilters) toggleFilters.onclick = function () {
-    state.filtersOpen = !state.filtersOpen;
-    state.flash = null;
-    render();
-  };
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-type]"), function (b) {
-    b.onclick = function () {
-      var id = b.getAttribute("data-type");
-      var at = state.types.indexOf(id);
-      // Tapping a chip that's on turns it off, and vice versa.
-      if (at === -1) state.types.push(id); else state.types.splice(at, 1);
-      saveTypes(state.types);
-      state.flash = null;
-      render();
-    };
-  });
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
-    b.onclick = function () {
-      // Keep what's already typed before the screen is rebuilt.
-      state.draftName = app.querySelector("#pname").value;
-      state.draftNote = app.querySelector("#pnote").value;
-      state.formType = b.getAttribute("data-formtype");
-      render();
-      app.querySelector("#pname").value = state.draftName || "";
-      app.querySelector("#pnote").value = state.draftNote || "";
-    };
-  });
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-id]"), function (b) {
-    if (b.id === "deletePoint") return;
-    b.onclick = function () {
-      state.selectedId = b.getAttribute("data-id");
-      state.view = "detail";
-      state.flash = null;
-      window.scrollTo(0, 0);
-      render();
-    };
-  });
-
-  var back = app.querySelector("#back");
-  if (back) back.onclick = function () {
-    state.view = "list";
-    state.selectedId = null;
-    state.formError = null;
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  Array.prototype.forEach.call(app.querySelectorAll("[data-mode]"), function (b) {
-    b.onclick = function () {
-      state.mode = b.getAttribute("data-mode");
-      state.flash = null;
-      render();
-    };
-  });
-
-  var recentre = app.querySelector("#recentre");
-  if (recentre) recentre.onclick = function () {
-    frameView(nearbyPoints());
-  };
-
-  var relocate = app.querySelector("#relocate");
-  if (relocate) relocate.onclick = requestGPS;
-
-  var tryGps = app.querySelector("#tryGps");
-  if (tryGps) tryGps.onclick = requestGPS;
-
-  var use = app.querySelector("#useCoords");
-  if (use) use.onclick = function () {
-    var parsed = parseCoordinates(app.querySelector("#coords").value);
-    if (!parsed) {
-      state.manualError = "That didn't read as a coordinate pair. Try: -36.7530, 145.5720";
-    } else {
-      state.manualError = null;
-      state.position = parsed;
-      state.locationError = null;
-    }
-    render();
-  };
-
-  var copy = app.querySelector("#copy");
-  if (copy) copy.onclick = function () {
-    var text = copy.getAttribute("data-coords");
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(function () { copy.textContent = "Copied"; });
-    } else {
-      copy.textContent = text;
-    }
-  };
-
-  var addHere = app.querySelector("#addHere");
-  if (addHere) addHere.onclick = function () {
-    state.pendingPos = state.position;
-    state.formType = "dump";
-    state.formError = null;
-    state.draftName = "";
-    state.draftNote = "";
-    state.view = "add";
-    state.flash = null;
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  var savePoint = app.querySelector("#savePoint");
-  if (savePoint) savePoint.onclick = function () {
-    var name = app.querySelector("#pname").value.trim();
-    var note = app.querySelector("#pnote").value.trim();
-    if (!name) {
-      state.formError = "Give it a name so you can find it again.";
-      state.draftNote = note;
-      render();
-      app.querySelector("#pnote").value = note;
-      return;
-    }
-    var record = {
-      id: newId(),
-      name: name,
-      type: state.formType,
-      lat: state.pendingPos.lat,
-      lon: state.pendingPos.lon,
-      potable: null,
-      fee: "",
-      access: note,
-      verified: today()
-    };
-    state.mine.push(record);
-    if (!saveMine(state.mine)) {
-      state.mine.pop();
-      state.formError = "Couldn't save — the browser's storage is full or blocked.";
-      render();
-      return;
-    }
-    state.view = "list";
-    state.flash = "Saved " + name + ".";
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  var del = app.querySelector("#deletePoint");
-  if (del) del.onclick = function () {
-    var id = del.getAttribute("data-id");
-    if (!window.confirm("Delete this point? It can't be undone.")) return;
-    state.mine = state.mine.filter(function (p) { return p.id !== id; });
-    saveMine(state.mine);
-    state.view = "list";
-    state.selectedId = null;
-    state.flash = "Point deleted.";
-    window.scrollTo(0, 0);
-    render();
-  };
-
-  var exportBtn = app.querySelector("#exportMine");
-  if (exportBtn) exportBtn.onclick = exportMine;
-
-  var importBtn = app.querySelector("#importBtn");
-  var importFile = app.querySelector("#importFile");
-  if (importBtn && importFile) {
-    importBtn.onclick = function () { importFile.click(); };
-    importFile.onchange = function () {
-      var f = importFile.files[0];
-      if (!f) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        importFrom(reader.result);
-        window.scrollTo(0, 0);
-        render();
-      };
-      reader.onerror = function () { state.flash = "Couldn't read that file."; render(); };
-      reader.readAsText(f);
-    };
-  }
-}
-
-/* ============================================================
-   9. START UP
-   ============================================================ */
-
-/* Pull in points.json once. Everything after this runs from memory,
-   so the app never touches the network again while you're using it. */
-function loadBundled() {
-  // No cache hints here on purpose: the service worker is what makes this
-  // work offline, and asking the browser's own cache to force a hit can
-  // pin an old failure in place.
-  return fetch("points.json")
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (data) {
-      if (Array.isArray(data) && data.length) {
-        BUNDLED = data.filter(isValidPoint);
-        USING_SAMPLE = false;
+      if (shot.comment) {
+        var cap = document.createElement("div");
+        cap.className = "cap";
+        cap.textContent = shot.comment;
+        card.appendChild(cap);
       }
-    })
-    .catch(function () { /* keep the samples */ });
-}
 
-/* The service worker is what makes this work in flight mode. It needs
-   a real web address (https, or localhost) — opening the file directly
-   off the disk won't register one, which is fine for testing. */
-function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) return;
-  if (location.protocol !== "https:" && location.hostname !== "localhost") return;
-  navigator.serviceWorker.register("sw.js").catch(function () { /* not fatal */ });
-}
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      meta.appendChild(document.createTextNode(shot.taken));
 
-state.mine = loadMine();
-state.types = loadTypes(state.types);
+      var del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "Delete photo";
+      del.onclick = function () {
+        if (!window.confirm("Delete this photo? It can't be undone.")) return;
+        deletePhoto(shot.id).then(function () { showPhotos(pointId); });
+      };
+      meta.appendChild(del);
+      card.appendChild(meta);
 
-render();
-loadBundled().then(function () { render(); });
-requestGPS();
-registerServiceWorker();
-</script>
-</body>
-</html>
-s permission '
-         + 'on private ground. Check the rules for your state before you dig.</div>';
-  }
-  html += '<p class="note">Distance is straight line, not road distance. Maps needs signal — the link will work once you are back in range.</p>';
-  html += '</div>';
-  return html;
+      host.appendChild(card);
+    });
+  });
 }
 
 /* ============================================================
@@ -2016,6 +1658,10 @@ function wireUp() {
 
   var back = app.querySelector("#back");
   if (back) back.onclick = function () {
+    if (state.pendingShot) {
+      URL.revokeObjectURL(state.pendingShot.url);
+      state.pendingShot = null;
+    }
     state.view = "list";
     state.selectedId = null;
     state.formError = null;
@@ -2052,6 +1698,66 @@ function wireUp() {
       state.position = parsed;
       state.locationError = null;
     }
+    render();
+  };
+
+  var addPhoto = app.querySelector("#addPhoto");
+  var photoFile = app.querySelector("#photoFile");
+  if (addPhoto && photoFile) {
+    // Clicking a file input is what opens the camera. The input itself is
+    // hidden because the browser's own version of it is small and ugly.
+    addPhoto.onclick = function () { photoFile.click(); };
+
+    photoFile.onchange = function () {
+      var file = photoFile.files[0];
+      if (!file) return;
+
+      state.photoBusy = true;
+      render();
+
+      shrinkPhoto(file).then(function (blob) {
+        state.photoBusy = false;
+        state.pendingShot = {
+          pointId: state.selectedId,
+          blob: blob,
+          url: URL.createObjectURL(blob)   // a temporary address to show it at
+        };
+        render();
+      }).catch(function () {
+        state.photoBusy = false;
+        state.flash = "Couldn't read that picture.";
+        render();
+      });
+    };
+  }
+
+  var saveShot = app.querySelector("#saveShot");
+  if (saveShot) saveShot.onclick = function () {
+    var pending = state.pendingShot;
+    if (!pending) return;
+    var note = app.querySelector("#shotNote").value.trim();
+
+    savePhoto({
+      id: "shot-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7),
+      pointId: pending.pointId,
+      comment: note,
+      taken: today(),
+      blob: pending.blob
+    }).then(function () {
+      URL.revokeObjectURL(pending.url);
+      state.pendingShot = null;
+      state.flash = "Photo saved.";
+      render();
+    }).catch(function () {
+      state.flash = "Couldn't save that photo — the phone may be out of room.";
+      render();
+    });
+  };
+
+  var dropShot = app.querySelector("#dropShot");
+  if (dropShot) dropShot.onclick = function () {
+    URL.revokeObjectURL(state.pendingShot.url);
+    state.pendingShot = null;
     render();
   };
 
