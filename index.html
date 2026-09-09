@@ -159,7 +159,7 @@
   .tag {
     display: inline-block; margin-top: 3px; margin-right: 4px;
     font-size: 12px; font-weight: 700; letter-spacing: .02em;
-    padding: 2px 7px; border-radius: 3px; color: #fff;
+    padding: 3px 8px; border-radius: 3px; color: #fff;
   }
   .tag.dump { background: var(--dump); }
   .tag.water { background: var(--water); }
@@ -181,11 +181,13 @@
   }
   .types button {
     min-height: 54px;
+    padding: 0 4px;
     border: 2px solid var(--c);
     border-radius: 6px;
     background: transparent;
     color: var(--c);
-    font: inherit; font-weight: 700; font-size: 16px;
+    font: inherit; font-weight: 700; font-size: 15px;
+    white-space: nowrap;
     cursor: pointer;
   }
   .types button[aria-pressed="true"] { background: var(--c); color: #fff; }
@@ -256,6 +258,33 @@
     background: var(--surface);
   }
   .leaflet-container { font: inherit; border-radius: 8px; }
+  /* Emoji are drawn in their own colours, so they need a light background to
+     read against. The category colour becomes the ring instead of the fill —
+     it still identifies the pin at a glance, and the icon stays legible. */
+  .pin {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: #fff;
+    border: 3px solid var(--c);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .4);
+    display: grid; place-items: center;
+    font-size: 16px; line-height: 1;
+    cursor: pointer;
+  }
+  .pin-mine { box-shadow: 0 0 0 2px var(--ink), 0 1px 3px rgba(0, 0, 0, .4); }
+
+  /* The same trick wherever an icon sits on a coloured chip. */
+  .ico {
+    display: inline-grid; place-items: center;
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    background: #fff;
+    font-size: 10px; line-height: 1;
+    vertical-align: -3px;
+    margin-right: 3px;
+  }
+  .types .ico { width: 20px; height: 20px; font-size: 12px; vertical-align: -4px; }
+
   .leaflet-control-attribution { font-size: 10px; }
   .mapcount {
     margin: 0 14px 10px; padding: 0 2px;
@@ -319,13 +348,13 @@ var SAMPLE_POINTS = [
    LPG, rest areas — means adding a line here, a colour above, and a matching
    entry in fetch_points.py. Nothing else needs to change. */
 var TYPES = [
-  { id: "dump",    short: "Dump",    full: "Dump point" },
-  { id: "water",   short: "Water",   full: "Water point" },
-  { id: "camp",    short: "Camp",    full: "Free camp" },
-  { id: "butcher", short: "Butcher", full: "Butcher" },
-  { id: "bakery",  short: "Bakery",  full: "Bakery" },
-  { id: "beverages", short: "Beverages", full: "Beverages" },
-  { id: "fuel",    short: "Fuel",    full: "Fuel" }
+  { id: "dump",      short: "Dump",      full: "Dump point",  icon: "💩" },
+  { id: "water",     short: "Water",     full: "Water point", icon: "🚰" },
+  { id: "camp",      short: "Camp",      full: "Free camp",   icon: "⛺"    },
+  { id: "butcher",   short: "Butcher",   full: "Butcher",     icon: "🥩" },
+  { id: "bakery",    short: "Bakery",    full: "Bakery",      icon: "🥖" },
+  { id: "beverages", short: "Beverages", full: "Beverages",   icon: "🍺" },
+  { id: "fuel",      short: "Fuel",      full: "Fuel",        icon: "⛽"    }
 ];
 
 function typeInfo(id) {
@@ -567,7 +596,10 @@ function escapeHtml(s) {
 
 function tagsFor(p, short) {
   var info = typeInfo(p.type);
+  // The icon is decoration next to a word that already says the same thing,
+  // so it is hidden from screen readers rather than read out twice.
   var html = '<span class="tag ' + p.type + '">'
+           + '<span class="ico" aria-hidden="true">' + (info.icon || "") + '</span>'
            + (short ? info.short : info.full) + '</span>';
   if (p.mine) html += '<span class="tag mine">Mine</span>';
   return html;
@@ -603,7 +635,7 @@ function listView() {
   TYPES.forEach(function (t) {
     html += '<button data-type="' + t.id + '" style="--c: var(--' + t.id + ')" '
       + 'aria-pressed="' + (state.types.indexOf(t.id) !== -1) + '">'
-      + t.short + '</button>';
+      + '<span class="ico" aria-hidden="true">' + t.icon + '</span>' + t.short + '</button>';
   });
   html += '</div>';
 
@@ -889,7 +921,28 @@ function updateMapCount(view) {
   }
 }
 
+/* A map pin: the category's colour with its icon sitting on top.
+
+   L.divIcon means the pin is an ordinary bit of HTML rather than a shape
+   drawn on a canvas, which is what lets it hold an emoji. The emoji comes
+   from the phone's own font, so it costs nothing to download and works with
+   no signal — no image files to fetch, nothing to go missing in the bush. */
+function markerIcon(p) {
+  var info = typeInfo(p.type);
+  return L.divIcon({
+    className: "",          // stop Leaflet adding its own box around it
+    html: '<div class="pin' + (p.mine ? " pin-mine" : "") + '" '
+        + 'style="--c: var(--' + p.type + ')" role="img" '
+        + 'aria-label="' + escapeHtml(info.full) + '">'
+        + (info.icon || "") + '</div>',
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],   // centre the circle on the position, not its corner
+    tooltipAnchor: [0, -18]
+  });
+}
+
 function refreshMarkers() {
+
 
   if (!markerLayer) return;
   markerLayer.clearLayers();
@@ -897,13 +950,7 @@ function refreshMarkers() {
   var view = pointsInView();
 
   view.shown.forEach(function (p) {
-    var marker = L.circleMarker([p.lat, p.lon], {
-      radius: 8,
-      color: p.mine ? cssVar("--ink") : "#fff",
-      weight: p.mine ? 3 : 2,
-      fillColor: pointColour(p),
-      fillOpacity: 1
-    });
+    var marker = L.marker([p.lat, p.lon], { icon: markerIcon(p) });
     marker.bindTooltip(p.name);
     marker.on("click", function () {
       state.selectedId = p.id;
@@ -916,9 +963,11 @@ function refreshMarkers() {
   });
 
   // You, drawn last so nothing sits on top of it.
+  // You stay a plain ring. Everything else is an icon, so the one thing that
+  // isn't a place reads as different at a glance.
   if (state.position) {
     L.circleMarker([state.position.lat, state.position.lon], {
-      radius: 6,
+      radius: 7,
       color: cssVar("--ink"),
       weight: 3,
       fillColor: "#fff",
