@@ -25,7 +25,7 @@
 
 /* The app's own files. Bump this number after any change to them, or an
    already-installed phone will keep serving its stored copy for ever. */
-var CACHE_NAME = "yobotrip-v9";
+var CACHE_NAME = "yobotrip-v10";
 
 /* The files the app cannot run without. If any one of these fails to
    download, the whole install fails and the old version stays put —
@@ -54,14 +54,28 @@ var MAX_TILES = 3000;          // roughly 150 MB at worst; usually far less
    sample data, and a missing file here must not break the install. */
 var OPTIONAL_FILES = ["./points.json"];
 
+/* Asks for a file from the network, ignoring anything the browser already has
+   sitting in its own cache.
+
+   This matters more than it looks. Without it, installing a new version can
+   copy the *old* files into the new store — the browser quietly answers from
+   its own cache, the service worker files that stale copy away, and because
+   we then serve cache-first and never look again, the phone is pinned to the
+   old version for good. No amount of reopening the app fixes it.
+
+   "reload" means: go and ask the server, properly. */
+function fresh(url) {
+  return new Request(url, { cache: "reload" });
+}
+
 self.addEventListener("install", function (event) {
   // waitUntil says "don't call the install finished until this is done".
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
-      return cache.addAll(CORE_FILES).then(function () {
+      return cache.addAll(CORE_FILES.map(fresh)).then(function () {
         // Try the optional ones, but swallow any failure.
         return Promise.all(OPTIONAL_FILES.map(function (url) {
-          return cache.add(url).catch(function () { return null; });
+          return cache.add(fresh(url)).catch(function () { return null; });
         }));
       });
     }).then(function () {
