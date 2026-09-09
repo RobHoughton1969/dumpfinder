@@ -27,6 +27,11 @@
     --beverages: #5B3B8C;
     --fuel: #0D6A6E;
     --pub: #97276E;
+    --npcamp: #14532D;
+    --fossick: #445A75;
+    --antiques: #6E4B2A;
+    --outdoor: #4F6B2F;
+
     --flag: #7A5B00;
     --flag-bg: #F0DFA8;
     --mine: #3F4636;
@@ -241,6 +246,11 @@
   .tag.beverages { background: var(--beverages); }
   .tag.fuel { background: var(--fuel); }
   .tag.pub { background: var(--pub); }
+  .tag.npcamp { background: var(--npcamp); }
+  .tag.fossick { background: var(--fossick); }
+  .tag.antiques { background: var(--antiques); }
+  .tag.outdoor { background: var(--outdoor); }
+
   .tag.mine { background: var(--mine); }
 
   /* ---- category chips ---- */
@@ -309,6 +319,13 @@
   .btn:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
   .err { color: var(--dump); font-size: 15px; font-weight: 600; margin-top: 10px; }
   .note { color: var(--ink-soft); font-size: 14px; margin-top: 10px; line-height: 1.45; }
+  .warn {
+    margin-top: 14px; padding: 14px;
+    background: var(--flag-bg); color: var(--flag);
+    border-radius: 6px;
+    font-size: 15px; font-weight: 600; line-height: 1.45;
+  }
+
 
   .actions { margin: 0 14px 32px; }
   .pair { display: flex; gap: 10px; }
@@ -441,7 +458,11 @@ var TYPES = [
   { id: "bakery",    short: "Bakery",    full: "Bakery",      icon: "🥖" },
   { id: "beverages", short: "Beverages", full: "Beverages",   icon: "🍺" },
   { id: "fuel",      short: "Fuel",      full: "Fuel",        icon: "⛽"    },
-  { id: "pub",       short: "Pub",       full: "Pub",         icon: "🍻" }
+  { id: "pub",       short: "Pub",       full: "Pub",         icon: "🍻" },
+  { id: "npcamp",    short: "Park camp", full: "National park camp", icon: "🏞️" },
+  { id: "fossick",   short: "Fossick",   full: "Fossicking area",    icon: "⛏️" },
+  { id: "antiques",  short: "Antiques",  full: "Antique shop",       icon: "🏺" },
+  { id: "outdoor",   short: "Outdoor",   full: "Camping & shooting", icon: "🎒" }
 ];
 
 function typeInfo(id) {
@@ -1214,6 +1235,644 @@ function detailView() {
   html += '<a class="btn secondary" href="https://maps.apple.com/?daddr=' + p.lat + ',' + p.lon + '&dirflg=d">Open in Maps</a>';
   if (p.mine) {
     html += '<button class="btn danger" id="deletePoint" data-id="' + escapeHtml(p.id) + '">Delete this point</button>';
+  }
+  if (p.type === "fossick") {
+    // Double quotes here so the apostrophe in "Miner's" needs no escaping.
+    html += '<div class="warn">Fossicking needs a licence — a '
+         + "Miner's Right or fossicking permit — in most states, and the "
+         + "landholder's permission on private ground. Check the rules for "
+         + 'your state before you dig.</div>';
+  }
+  html += '<p class="note">Distance is straight line, not road distance. Maps needs signal — the link will work once you are back in range.</p>';
+  html += '</div>';
+  return html;
+}
+
+/* ============================================================
+   7. EXPORT AND IMPORT
+
+   Export builds a file in memory and hands it either to the iOS
+   share sheet (so it can go to Files, Messages, AirDrop) or to a
+   plain download link as a fallback.
+   ============================================================ */
+
+function exportMine() {
+  if (state.mine.length === 0) return;
+
+  var payload = {
+    format: "yobo-trip-points",
+    version: 1,
+    exported: today(),
+    points: state.mine
+  };
+  var text = JSON.stringify(payload, null, 1);
+  var filename = "yobo-trip-points-" + today() + ".json";
+  var file = new File([text], filename, { type: "application/json" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file], title: "My dump and water points" })
+      .catch(function () { downloadFile(text, filename); });
+  } else {
+    downloadFile(text, filename);
+  }
+}
+
+function downloadFile(text, filename) {
+  var blob = new Blob([text], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+function importFrom(text) {
+  var parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    state.flash = "That file isn't readable as JSON.";
+    return;
+  }
+
+  // Accept either the wrapper we export, or a bare array of points.
+  var incoming = Array.isArray(parsed) ? parsed
+               : (parsed && Array.isArray(parsed.points)) ? parsed.points
+               : null;
+
+  if (!incoming) {
+    state.flash = "That file doesn't contain any points.";
+    return;
+  }
+
+  var existingIds = {};
+  state.mine.forEach(function (p) { existingIds[p.id] = true; });
+
+  var added = 0, skipped = 0;
+  incoming.forEach(function (p) {
+    if (!isValidPoint(p)) { skipped++; return; }
+    if (p.id && existingIds[p.id]) { skipped++; return; }
+    var record = {
+      id: p.id || newId(),
+      name: p.name || "Imported point",
+      type: p.type,
+      lat: p.lat,
+      lon: p.lon,
+      potable: (p.potable === true || p.potable === false) ? p.potable : null,
+      fee: p.fee || "",
+      access: p.access || "",
+      verified: p.verified || ""
+    };
+    existingIds[record.id] = true;
+    state.mine.push(record);
+    added++;
+  });
+
+  saveMine(state.mine);
+  state.flash = "Imported " + added + (added === 1 ? " point" : " points")
+    + (skipped ? ", skipped " + skipped + " already there or unreadable." : ".");
+}
+
+/* ============================================================
+   8. EVENTS
+   ============================================================ */
+
+function wireUp() {
+  var toggleFilters = app.querySelector("#toggleFilters");
+  if (toggleFilters) toggleFilters.onclick = function () {
+    state.filtersOpen = !state.filtersOpen;
+    state.flash = null;
+    render();
+  };
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-type]"), function (b) {
+    b.onclick = function () {
+      var id = b.getAttribute("data-type");
+      var at = state.types.indexOf(id);
+      // Tapping a chip that's on turns it off, and vice versa.
+      if (at === -1) state.types.push(id); else state.types.splice(at, 1);
+      saveTypes(state.types);
+      state.flash = null;
+      render();
+    };
+  });
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
+    b.onclick = function () {
+      // Keep what's already typed before the screen is rebuilt.
+      state.draftName = app.querySelector("#pname").value;
+      state.draftNote = app.querySelector("#pnote").value;
+      state.formType = b.getAttribute("data-formtype");
+      render();
+      app.querySelector("#pname").value = state.draftName || "";
+      app.querySelector("#pnote").value = state.draftNote || "";
+    };
+  });
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-id]"), function (b) {
+    if (b.id === "deletePoint") return;
+    b.onclick = function () {
+      state.selectedId = b.getAttribute("data-id");
+      state.view = "detail";
+      state.flash = null;
+      window.scrollTo(0, 0);
+      render();
+    };
+  });
+
+  var back = app.querySelector("#back");
+  if (back) back.onclick = function () {
+    state.view = "list";
+    state.selectedId = null;
+    state.formError = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-mode]"), function (b) {
+    b.onclick = function () {
+      state.mode = b.getAttribute("data-mode");
+      state.flash = null;
+      render();
+    };
+  });
+
+  var recentre = app.querySelector("#recentre");
+  if (recentre) recentre.onclick = function () {
+    frameView(nearbyPoints());
+  };
+
+  var relocate = app.querySelector("#relocate");
+  if (relocate) relocate.onclick = requestGPS;
+
+  var tryGps = app.querySelector("#tryGps");
+  if (tryGps) tryGps.onclick = requestGPS;
+
+  var use = app.querySelector("#useCoords");
+  if (use) use.onclick = function () {
+    var parsed = parseCoordinates(app.querySelector("#coords").value);
+    if (!parsed) {
+      state.manualError = "That didn't read as a coordinate pair. Try: -36.7530, 145.5720";
+    } else {
+      state.manualError = null;
+      state.position = parsed;
+      state.locationError = null;
+    }
+    render();
+  };
+
+  var copy = app.querySelector("#copy");
+  if (copy) copy.onclick = function () {
+    var text = copy.getAttribute("data-coords");
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { copy.textContent = "Copied"; });
+    } else {
+      copy.textContent = text;
+    }
+  };
+
+  var addHere = app.querySelector("#addHere");
+  if (addHere) addHere.onclick = function () {
+    state.pendingPos = state.position;
+    state.formType = "dump";
+    state.formError = null;
+    state.draftName = "";
+    state.draftNote = "";
+    state.view = "add";
+    state.flash = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var savePoint = app.querySelector("#savePoint");
+  if (savePoint) savePoint.onclick = function () {
+    var name = app.querySelector("#pname").value.trim();
+    var note = app.querySelector("#pnote").value.trim();
+    if (!name) {
+      state.formError = "Give it a name so you can find it again.";
+      state.draftNote = note;
+      render();
+      app.querySelector("#pnote").value = note;
+      return;
+    }
+    var record = {
+      id: newId(),
+      name: name,
+      type: state.formType,
+      lat: state.pendingPos.lat,
+      lon: state.pendingPos.lon,
+      potable: null,
+      fee: "",
+      access: note,
+      verified: today()
+    };
+    state.mine.push(record);
+    if (!saveMine(state.mine)) {
+      state.mine.pop();
+      state.formError = "Couldn't save — the browser's storage is full or blocked.";
+      render();
+      return;
+    }
+    state.view = "list";
+    state.flash = "Saved " + name + ".";
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var del = app.querySelector("#deletePoint");
+  if (del) del.onclick = function () {
+    var id = del.getAttribute("data-id");
+    if (!window.confirm("Delete this point? It can't be undone.")) return;
+    state.mine = state.mine.filter(function (p) { return p.id !== id; });
+    saveMine(state.mine);
+    state.view = "list";
+    state.selectedId = null;
+    state.flash = "Point deleted.";
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var exportBtn = app.querySelector("#exportMine");
+  if (exportBtn) exportBtn.onclick = exportMine;
+
+  var importBtn = app.querySelector("#importBtn");
+  var importFile = app.querySelector("#importFile");
+  if (importBtn && importFile) {
+    importBtn.onclick = function () { importFile.click(); };
+    importFile.onchange = function () {
+      var f = importFile.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        importFrom(reader.result);
+        window.scrollTo(0, 0);
+        render();
+      };
+      reader.onerror = function () { state.flash = "Couldn't read that file."; render(); };
+      reader.readAsText(f);
+    };
+  }
+}
+
+/* ============================================================
+   9. START UP
+   ============================================================ */
+
+/* Pull in points.json once. Everything after this runs from memory,
+   so the app never touches the network again while you're using it. */
+function loadBundled() {
+  // No cache hints here on purpose: the service worker is what makes this
+  // work offline, and asking the browser's own cache to force a hit can
+  // pin an old failure in place.
+  return fetch("points.json")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (Array.isArray(data) && data.length) {
+        BUNDLED = data.filter(isValidPoint);
+        USING_SAMPLE = false;
+      }
+    })
+    .catch(function () { /* keep the samples */ });
+}
+
+/* The service worker is what makes this work in flight mode. It needs
+   a real web address (https, or localhost) — opening the file directly
+   off the disk won't register one, which is fine for testing. */
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  if (location.protocol !== "https:" && location.hostname !== "localhost") return;
+  navigator.serviceWorker.register("sw.js").catch(function () { /* not fatal */ });
+}
+
+state.mine = loadMine();
+state.types = loadTypes(state.types);
+
+render();
+loadBundled().then(function () { render(); });
+requestGPS();
+registerServiceWorker();
+</script>
+</body>
+</html>
+s Right or '
+         + 'fossicking permit — in most states, and the landholder  html += '</div>';
+  return html;
+}
+
+/* ============================================================
+   7. EXPORT AND IMPORT
+
+   Export builds a file in memory and hands it either to the iOS
+   share sheet (so it can go to Files, Messages, AirDrop) or to a
+   plain download link as a fallback.
+   ============================================================ */
+
+function exportMine() {
+  if (state.mine.length === 0) return;
+
+  var payload = {
+    format: "yobo-trip-points",
+    version: 1,
+    exported: today(),
+    points: state.mine
+  };
+  var text = JSON.stringify(payload, null, 1);
+  var filename = "yobo-trip-points-" + today() + ".json";
+  var file = new File([text], filename, { type: "application/json" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file], title: "My dump and water points" })
+      .catch(function () { downloadFile(text, filename); });
+  } else {
+    downloadFile(text, filename);
+  }
+}
+
+function downloadFile(text, filename) {
+  var blob = new Blob([text], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+function importFrom(text) {
+  var parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    state.flash = "That file isn't readable as JSON.";
+    return;
+  }
+
+  // Accept either the wrapper we export, or a bare array of points.
+  var incoming = Array.isArray(parsed) ? parsed
+               : (parsed && Array.isArray(parsed.points)) ? parsed.points
+               : null;
+
+  if (!incoming) {
+    state.flash = "That file doesn't contain any points.";
+    return;
+  }
+
+  var existingIds = {};
+  state.mine.forEach(function (p) { existingIds[p.id] = true; });
+
+  var added = 0, skipped = 0;
+  incoming.forEach(function (p) {
+    if (!isValidPoint(p)) { skipped++; return; }
+    if (p.id && existingIds[p.id]) { skipped++; return; }
+    var record = {
+      id: p.id || newId(),
+      name: p.name || "Imported point",
+      type: p.type,
+      lat: p.lat,
+      lon: p.lon,
+      potable: (p.potable === true || p.potable === false) ? p.potable : null,
+      fee: p.fee || "",
+      access: p.access || "",
+      verified: p.verified || ""
+    };
+    existingIds[record.id] = true;
+    state.mine.push(record);
+    added++;
+  });
+
+  saveMine(state.mine);
+  state.flash = "Imported " + added + (added === 1 ? " point" : " points")
+    + (skipped ? ", skipped " + skipped + " already there or unreadable." : ".");
+}
+
+/* ============================================================
+   8. EVENTS
+   ============================================================ */
+
+function wireUp() {
+  var toggleFilters = app.querySelector("#toggleFilters");
+  if (toggleFilters) toggleFilters.onclick = function () {
+    state.filtersOpen = !state.filtersOpen;
+    state.flash = null;
+    render();
+  };
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-type]"), function (b) {
+    b.onclick = function () {
+      var id = b.getAttribute("data-type");
+      var at = state.types.indexOf(id);
+      // Tapping a chip that's on turns it off, and vice versa.
+      if (at === -1) state.types.push(id); else state.types.splice(at, 1);
+      saveTypes(state.types);
+      state.flash = null;
+      render();
+    };
+  });
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-formtype]"), function (b) {
+    b.onclick = function () {
+      // Keep what's already typed before the screen is rebuilt.
+      state.draftName = app.querySelector("#pname").value;
+      state.draftNote = app.querySelector("#pnote").value;
+      state.formType = b.getAttribute("data-formtype");
+      render();
+      app.querySelector("#pname").value = state.draftName || "";
+      app.querySelector("#pnote").value = state.draftNote || "";
+    };
+  });
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-id]"), function (b) {
+    if (b.id === "deletePoint") return;
+    b.onclick = function () {
+      state.selectedId = b.getAttribute("data-id");
+      state.view = "detail";
+      state.flash = null;
+      window.scrollTo(0, 0);
+      render();
+    };
+  });
+
+  var back = app.querySelector("#back");
+  if (back) back.onclick = function () {
+    state.view = "list";
+    state.selectedId = null;
+    state.formError = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  Array.prototype.forEach.call(app.querySelectorAll("[data-mode]"), function (b) {
+    b.onclick = function () {
+      state.mode = b.getAttribute("data-mode");
+      state.flash = null;
+      render();
+    };
+  });
+
+  var recentre = app.querySelector("#recentre");
+  if (recentre) recentre.onclick = function () {
+    frameView(nearbyPoints());
+  };
+
+  var relocate = app.querySelector("#relocate");
+  if (relocate) relocate.onclick = requestGPS;
+
+  var tryGps = app.querySelector("#tryGps");
+  if (tryGps) tryGps.onclick = requestGPS;
+
+  var use = app.querySelector("#useCoords");
+  if (use) use.onclick = function () {
+    var parsed = parseCoordinates(app.querySelector("#coords").value);
+    if (!parsed) {
+      state.manualError = "That didn't read as a coordinate pair. Try: -36.7530, 145.5720";
+    } else {
+      state.manualError = null;
+      state.position = parsed;
+      state.locationError = null;
+    }
+    render();
+  };
+
+  var copy = app.querySelector("#copy");
+  if (copy) copy.onclick = function () {
+    var text = copy.getAttribute("data-coords");
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { copy.textContent = "Copied"; });
+    } else {
+      copy.textContent = text;
+    }
+  };
+
+  var addHere = app.querySelector("#addHere");
+  if (addHere) addHere.onclick = function () {
+    state.pendingPos = state.position;
+    state.formType = "dump";
+    state.formError = null;
+    state.draftName = "";
+    state.draftNote = "";
+    state.view = "add";
+    state.flash = null;
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var savePoint = app.querySelector("#savePoint");
+  if (savePoint) savePoint.onclick = function () {
+    var name = app.querySelector("#pname").value.trim();
+    var note = app.querySelector("#pnote").value.trim();
+    if (!name) {
+      state.formError = "Give it a name so you can find it again.";
+      state.draftNote = note;
+      render();
+      app.querySelector("#pnote").value = note;
+      return;
+    }
+    var record = {
+      id: newId(),
+      name: name,
+      type: state.formType,
+      lat: state.pendingPos.lat,
+      lon: state.pendingPos.lon,
+      potable: null,
+      fee: "",
+      access: note,
+      verified: today()
+    };
+    state.mine.push(record);
+    if (!saveMine(state.mine)) {
+      state.mine.pop();
+      state.formError = "Couldn't save — the browser's storage is full or blocked.";
+      render();
+      return;
+    }
+    state.view = "list";
+    state.flash = "Saved " + name + ".";
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var del = app.querySelector("#deletePoint");
+  if (del) del.onclick = function () {
+    var id = del.getAttribute("data-id");
+    if (!window.confirm("Delete this point? It can't be undone.")) return;
+    state.mine = state.mine.filter(function (p) { return p.id !== id; });
+    saveMine(state.mine);
+    state.view = "list";
+    state.selectedId = null;
+    state.flash = "Point deleted.";
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  var exportBtn = app.querySelector("#exportMine");
+  if (exportBtn) exportBtn.onclick = exportMine;
+
+  var importBtn = app.querySelector("#importBtn");
+  var importFile = app.querySelector("#importFile");
+  if (importBtn && importFile) {
+    importBtn.onclick = function () { importFile.click(); };
+    importFile.onchange = function () {
+      var f = importFile.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        importFrom(reader.result);
+        window.scrollTo(0, 0);
+        render();
+      };
+      reader.onerror = function () { state.flash = "Couldn't read that file."; render(); };
+      reader.readAsText(f);
+    };
+  }
+}
+
+/* ============================================================
+   9. START UP
+   ============================================================ */
+
+/* Pull in points.json once. Everything after this runs from memory,
+   so the app never touches the network again while you're using it. */
+function loadBundled() {
+  // No cache hints here on purpose: the service worker is what makes this
+  // work offline, and asking the browser's own cache to force a hit can
+  // pin an old failure in place.
+  return fetch("points.json")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (Array.isArray(data) && data.length) {
+        BUNDLED = data.filter(isValidPoint);
+        USING_SAMPLE = false;
+      }
+    })
+    .catch(function () { /* keep the samples */ });
+}
+
+/* The service worker is what makes this work in flight mode. It needs
+   a real web address (https, or localhost) — opening the file directly
+   off the disk won't register one, which is fine for testing. */
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  if (location.protocol !== "https:" && location.hostname !== "localhost") return;
+  navigator.serviceWorker.register("sw.js").catch(function () { /* not fatal */ });
+}
+
+state.mine = loadMine();
+state.types = loadTypes(state.types);
+
+render();
+loadBundled().then(function () { render(); });
+requestGPS();
+registerServiceWorker();
+</script>
+</body>
+</html>
+s permission '
+         + 'on private ground. Check the rules for your state before you dig.</div>';
   }
   html += '<p class="note">Distance is straight line, not road distance. Maps needs signal — the link will work once you are back in range.</p>';
   html += '</div>';
