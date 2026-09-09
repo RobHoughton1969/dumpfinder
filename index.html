@@ -24,6 +24,8 @@
     --camp: #2E6B35;
     --butcher: #A11C3A;
     --bakery: #8A6A00;
+    --beverages: #5B3B8C;
+    --fuel: #0D6A6E;
     --flag: #7A5B00;
     --flag-bg: #F0DFA8;
     --mine: #3F4636;
@@ -164,12 +166,20 @@
   .tag.camp { background: var(--camp); }
   .tag.butcher { background: var(--butcher); }
   .tag.bakery { background: var(--bakery); }
+  .tag.beverages { background: var(--beverages); }
+  .tag.fuel { background: var(--fuel); }
   .tag.mine { background: var(--mine); }
 
   /* ---- category chips ---- */
-  .types { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 14px 10px; }
+  /* A grid rather than wrapping flex, so a row that isn't full leaves a gap
+     instead of stretching the last chip across the width of the screen. */
+  .types {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    padding: 14px 14px 10px;
+  }
   .types button {
-    flex: 1 1 28%;
     min-height: 54px;
     border: 2px solid var(--c);
     border-radius: 6px;
@@ -313,7 +323,9 @@ var TYPES = [
   { id: "water",   short: "Water",   full: "Water point" },
   { id: "camp",    short: "Camp",    full: "Free camp" },
   { id: "butcher", short: "Butcher", full: "Butcher" },
-  { id: "bakery",  short: "Bakery",  full: "Bakery" }
+  { id: "bakery",  short: "Bakery",  full: "Bakery" },
+  { id: "beverages", short: "Beverages", full: "Beverages" },
+  { id: "fuel",    short: "Fuel",    full: "Fuel" }
 ];
 
 function typeInfo(id) {
@@ -853,7 +865,7 @@ function pointsInView() {
     var step = total / MAX_MARKERS;
     var thinned = [];
     for (var i = 0; i < total; i += step) thinned.push(inView[Math.floor(i)]);
-    inView = thinned;
+    inView = thinned.slice(0, MAX_MARKERS);   // rounding can overshoot by one
   }
 
   return { shown: inView, total: total };
@@ -989,6 +1001,13 @@ function detailView() {
   html += '<dt>Distance and bearing</dt><dd class="num">' + d.value + ' ' + d.unit
        + ' &middot; ' + found.compass + ' (' + found.deg.toFixed(0) + '&deg;)</dd>';
   if (p.type === "water") html += '<dt>Drinkable</dt><dd>' + potable + '</dd>';
+  if (p.type === "fuel") {
+    // Only about a third of servos have their pumps recorded in OpenStreetMap.
+    // Saying so is more use than leaving the row out, which would read as
+    // "this one has nothing".
+    html += '<dt>Fuel</dt><dd>' + (p.fuels ? escapeHtml(p.fuels)
+      : "Not recorded — most servos carry unleaded and diesel") + '</dd>';
+  }
   if (p.hours) html += '<dt>Opening hours</dt><dd>' + escapeHtml(p.hours) + '</dd>';
   if (p.type === "dump" || p.type === "water" || p.type === "camp") {
     html += '<dt>Cost</dt><dd>' + escapeHtml(p.fee || "Unknown") + '</dd>';
