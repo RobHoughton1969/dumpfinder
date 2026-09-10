@@ -291,6 +291,7 @@
     border-radius: 8px; padding: 20px;
     box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
   }
+  .panel.inset { margin: 14px 0 0; }
   .panel h2 { margin: 0 0 6px; font-size: 19px; font-weight: 700; }
   .panel p { margin: 0 0 14px; font-size: 15px; line-height: 1.45; color: var(--ink-soft); }
   .panel label {
@@ -1504,6 +1505,7 @@ function detailView() {
   if (p.mine) {
     html += '<button class="btn danger" id="deletePoint" data-id="' + escapeHtml(p.id) + '">Delete this point</button>';
   }
+  if (p.type === "fuel") html += fuelPanel(found.km);
   if (p.type === "fossick") {
     // Double quotes here so the apostrophe in "Miner's" needs no escaping.
     html += '<div class="warn">Fossicking needs a licence — a '
@@ -1530,7 +1532,7 @@ function photoSection() {
   // written a note and pressed Save. Nothing is stored before that, so
   // backing out leaves nothing behind.
   if (state.pendingShot) {
-    html += '<div class="panel" style="margin-left:0;margin-right:0">'
+    html += '<div class="panel inset">'
       + '<h2>Add this photo</h2>'
       + '<img class="pending" src="' + state.pendingShot.url + '" alt="The photo you just took">'
       + '<label for="shotNote">Note (optional)</label>'
@@ -1618,34 +1620,66 @@ function showPhotos(pointId) {
    ============================================================ */
 
 function fuelView() {
-  var f = state.fuel;
   var html = '<div class="detail">';
   html += '<button class="back" id="back">Back</button>';
   html += '<h1>Fuel calculator</h1>';
-  html += '<div class="panel">';
-  html += fuelField("fLitres", "litres", "Fuel in the tank (litres)", "e.g. 80");
-  html += fuelField("fUsage", "usage", "Fuel use (litres per 100 km)", "e.g. 14.5");
-  html += fuelField("fDistance", "distance", "Distance to go (km) — optional", "e.g. 320");
-  html += '<div class="fuel-out" id="fuelOut">' + fuelResult() + '</div>';
-  html += '</div>';
+  html += fuelPanel();
   html += '<p class="note">Plain arithmetic on the numbers you give it. Towing, '
        + 'headwinds and hills all push use up — leave yourself a margin.</p>';
   html += '</div>';
   return html;
 }
 
-function fuelField(id, key, label, placeholder) {
-  // inputmode="decimal" brings up the number keypad on the phone.
-  return '<label for="' + id + '">' + label + '</label>'
-    + '<input id="' + id + '" data-fuel="' + key + '" type="text" inputmode="decimal" '
-    + 'autocomplete="off" placeholder="' + placeholder + '" '
-    + 'value="' + escapeHtml(state.fuel[key]) + '">';
+/* The calculator itself, used in two places.
+
+   On its own screen, all three fields are yours and all three are
+   remembered. On a servo's page, the distance is filled in for you — the
+   straight-line distance to that servo — and is deliberately *not*
+   remembered, because it belongs to that place, not to your car. Tank and
+   consumption are about the car, so those two are always kept. */
+function fuelPanel(seedDistance) {
+  var onStation = seedDistance !== undefined;
+  var f = {
+    litres: state.fuel.litres,
+    usage: state.fuel.usage,
+    distance: onStation ? String(Math.round(seedDistance)) : state.fuel.distance
+  };
+
+  var html = '<div class="panel' + (onStation ? ' inset' : '') + '">';
+  if (onStation) html += '<h2>Can I reach it?</h2>';
+  html += fuelField("fLitres", "litres", "Fuel in the tank (litres)", "e.g. 80", f.litres, false);
+  html += fuelField("fUsage", "usage", "Fuel use (litres per 100 km)", "e.g. 14.5", f.usage, false);
+  html += fuelField("fDistance", "distance",
+    onStation ? "Distance there (km) — straight line" : "Distance to go (km) — optional",
+    "e.g. 320", f.distance, onStation);
+  html += '<div class="fuel-out" id="fuelOut">' + fuelResult(f) + '</div>';
+  if (onStation) {
+    html += '<p class="note">That distance is as the crow flies — by road it will be '
+         + 'further. Change it if you know the road.</p>';
+  }
+  html += '</div>';
+  return html;
 }
 
-function fuelResult() {
-  var litres = parseFloat(state.fuel.litres);
-  var usage = parseFloat(state.fuel.usage);
-  var dist = parseFloat(state.fuel.distance);
+/* 'local' marks a field whose value should not be remembered between opens. */
+function fuelField(id, key, label, placeholder, value, local) {
+  // inputmode="decimal" brings up the number keypad on the phone.
+  return '<label for="' + id + '">' + label + '</label>'
+    + '<input id="' + id + '" ' + (local ? 'data-fuel-local' : 'data-fuel') + '="' + key + '" '
+    + 'type="text" inputmode="decimal" autocomplete="off" '
+    + 'placeholder="' + placeholder + '" value="' + escapeHtml(value) + '">';
+}
+
+/* Reads the three fields back off the screen, whichever page they're on. */
+function currentFuelFields() {
+  function val(id) { var el = document.getElementById(id); return el ? el.value : ""; }
+  return { litres: val("fLitres"), usage: val("fUsage"), distance: val("fDistance") };
+}
+
+function fuelResult(f) {
+  var litres = parseFloat(f.litres);
+  var usage = parseFloat(f.usage);
+  var dist = parseFloat(f.distance);
 
   // "!(x > 0)" is the tidy way to catch both "not a number" and "zero or
   // less" in one go — NaN fails every comparison.
@@ -1836,12 +1870,17 @@ function wireUp() {
 
   // The calculator recalculates on every keystroke, writing only the result
   // block so the field you're typing in keeps its focus and keyboard.
-  Array.prototype.forEach.call(app.querySelectorAll("[data-fuel]"), function (input) {
+  Array.prototype.forEach.call(app.querySelectorAll("[data-fuel], [data-fuel-local]"), function (input) {
     input.oninput = function () {
-      state.fuel[input.getAttribute("data-fuel")] = input.value;
+      var f = currentFuelFields();
+      state.fuel.litres = f.litres;
+      state.fuel.usage = f.usage;
+      // Only the standalone calculator's distance is worth keeping; on a
+      // servo's page it was filled in for that servo.
+      if (app.querySelector('[data-fuel="distance"]')) state.fuel.distance = f.distance;
       remember(FUEL_KEY, state.fuel);
       var out = document.getElementById("fuelOut");
-      if (out) out.innerHTML = fuelResult();
+      if (out) out.innerHTML = fuelResult(f);
     };
   });
 
