@@ -31,6 +31,9 @@
     --fossick: #445A75;
     --antiques: #6E4B2A;
     --outdoor: #4F6B2F;
+    --toilets: #556270;
+    --grocery: #B45309;
+    --swim: #0891B2;
 
     --flag: #7A5B00;
     --flag-bg: #F0DFA8;
@@ -248,6 +251,9 @@
   .tag.fossick { background: var(--fossick); }
   .tag.antiques { background: var(--antiques); }
   .tag.outdoor { background: var(--outdoor); }
+  .tag.toilets { background: var(--toilets); }
+  .tag.grocery { background: var(--grocery); }
+  .tag.swim { background: var(--swim); }
 
   .tag.mine { background: var(--mine); }
 
@@ -428,6 +434,46 @@
   .fuel-dl .ok { color: var(--camp); }
   .fuel-dl .bad { color: var(--butcher); }
 
+  /* ---- weather ----
+     Same shape as the category bar: one line folded, the forecast when
+     tapped. */
+  .wxbar {
+    display: flex; align-items: center; gap: 12px;
+    width: calc(100% - 28px); margin: 0 14px 12px;
+    min-height: 58px; padding: 8px 14px;
+    background: var(--surface); border: none; border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+  }
+  .wxbar:focus-visible { outline: 3px solid var(--water); outline-offset: 2px; }
+  .wxbar .wx-ico { flex: 0 0 auto; font-size: 26px; line-height: 1; }
+  .wxbar .wx-temp { flex: 0 0 auto; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
+  .wxbar .wx-temp small { font-size: 14px; font-weight: 600; letter-spacing: 0; }
+  .wxbar .wx-main { flex: 1; min-width: 0; font-size: 14px; line-height: 1.3; color: var(--ink-soft); font-weight: 600; }
+  .wxbar .wx-main b { display: block; color: var(--ink); font-size: 15px; }
+  .wxbar .chev { flex: 0 0 auto; font-size: 18px; font-weight: 800; line-height: 1; transition: transform .15s ease; }
+  .wxbar[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  @media (prefers-reduced-motion: reduce) { .wxbar .chev { transition: none; } }
+  .wx-stale { color: var(--flag); }
+
+  .wx-days {
+    margin: -4px 14px 14px; padding: 4px 14px 6px;
+    background: var(--surface); border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(20, 24, 14, .10);
+  }
+  .wx-day {
+    display: grid; grid-template-columns: 58px 34px 1fr auto; align-items: center; gap: 10px;
+    min-height: 48px; border-top: 1px solid var(--rule); font-size: 15px;
+  }
+  .wx-day:first-child { border-top: none; }
+  .wx-day .d { font-weight: 700; }
+  .wx-day .i { font-size: 22px; line-height: 1; text-align: center; }
+  .wx-day .w { color: var(--ink-soft); font-size: 14px; }
+  .wx-day .t { font-weight: 700; white-space: nowrap; }
+  .wx-day .t small { color: var(--ink-soft); font-weight: 600; }
+  .wx-foot { padding: 8px 0 6px; font-size: 12px; color: var(--ink-soft); font-weight: 600; }
+  .wx-none { margin: 0 14px 12px; font-size: 14px; color: var(--ink-soft); font-weight: 600; }
+
   .hidden { display: none; }
 
 </style>
@@ -501,7 +547,10 @@ var TYPES = [
   { id: "npcamp",    short: "Park camp", full: "National park camp", icon: "🏞️" },
   { id: "fossick",   short: "Fossick",   full: "Fossicking area",    icon: "⛏️" },
   { id: "antiques",  short: "Antiques",  full: "Antique shop",       icon: "🏺" },
-  { id: "outdoor",   short: "Outdoor",   full: "Camping & shooting", icon: "🎒" }
+  { id: "outdoor",   short: "Outdoor",   full: "Camping & shooting", icon: "🎒" },
+  { id: "toilets",   short: "Toilets",   full: "Toilets",            icon: "🚻" },
+  { id: "grocery",   short: "Grocery",   full: "Grocery",            icon: "🛒" },
+  { id: "swim",      short: "Swim",      full: "Swimming spot",      icon: "🏊" }
 ];
 
 function typeInfo(id) {
@@ -530,6 +579,7 @@ var STORAGE_KEY = "dumpfinder.mypoints.v1";
 var TYPES_KEY = "dumpfinder.types.v1";
 var BASEMAP_KEY = "yobotrip.basemap.v1";
 var FUEL_KEY = "yobotrip.fuel.v1";
+var WEATHER_KEY = "yobotrip.weather.v1";
 
 /* One small routine for every "remember this between opens" value: read it
    back as JSON, and if anything at all goes wrong, hand back the default. */
@@ -811,6 +861,10 @@ var state = {
   mode: "map",           // "list" | "map" — the app opens on the map
   basemap: "map",        // "map" | "satellite" — what the tiles show
   fuel: { litres: "", usage: "", distance: "" },   // the calculator's fields
+  weather: null,         // { at, lat, lon, data } — the last forecast fetched
+  weatherBusy: false,    // a fetch is in flight
+  weatherTried: false,   // have we asked at least once this session?
+  weatherOpen: false,    // is the forecast folded out?
   filtersOpen: false,    // is the category picker folded out?
   photoBusy: false,      // a picture is being shrunk right now
   pendingShot: null,     // a photo taken but not yet saved
@@ -828,18 +882,33 @@ var state = {
   flash: null            // one-line confirmation shown at the top
 };
 
+/* Distance and bearing to all sixty thousand places, sorted nearest-first,
+   worked out ONCE for a given position and kept. Everything that follows —
+   a chip tapped, a page opened, back to the list — only has to pick the
+   categories that are on out of that ready-made list, which is cheap.
+
+   The key says what the list was built from: where you are, and how many
+   places there are (yours and the bundled ones). If any of that changes the
+   list is stale and gets rebuilt; if not, it is reused as it stands. Sorting
+   sixty thousand things is a quarter of a second on a phone — fine when you
+   move, not fine on every tap. */
+var measured = { key: null, list: [] };
+
 function nearbyPoints() {
   if (!state.position) return [];
   var here = state.position;
 
-  var visible = allPoints().filter(function (p) {
-    return state.types.indexOf(p.type) !== -1;
-  });
+  var key = here.lat + "," + here.lon + "|" + state.mine.length + "|" + BUNDLED.length;
+  if (measured.key !== key) {
+    var list = allPoints().map(function (p) { return measure(here, p); });
+    list.sort(function (a, b) { return a.km - b.km; });
+    measured = { key: key, list: list };
+  }
 
-  var measured = visible.map(function (p) { return measure(here, p); });
-
-  measured.sort(function (a, b) { return a.km - b.km; });
-  return measured;
+  // A lookup table beats searching a list for every one of 60,000 points.
+  var on = {};
+  state.types.forEach(function (t) { on[t] = true; });
+  return measured.list.filter(function (r) { return on[r.point.type]; });
 }
 
 /* ============================================================
@@ -868,6 +937,7 @@ function requestGPS() {
       };
       state.locating = false;
       render();
+      weatherFor(state.position);
     },
     function (err) {
       state.locating = false;
@@ -1064,6 +1134,8 @@ function listView() {
   if (!state.position) {
     return html + manualPanel(state.locationError) + toolsBlock() + myPointsPanel();
   }
+
+  html += weatherBlock();
 
   if (results.length === 0) {
     html += '<div class="panel"><h2>Nothing switched on</h2>'
@@ -1368,8 +1440,22 @@ function markerIcon(p) {
   });
 }
 
+/* Redrawing four hundred pins costs a couple of hundred milliseconds, and
+   render() runs on every tap — including taps that never touch the map,
+   like folding the category picker open. So the pins are only rebuilt when
+   something they depend on has changed: where the map is looking, which
+   categories are on, where you are, or how many places there are. */
+var lastDraw = null;
+
 function refreshMarkers() {
   if (!markerLayer) return;
+
+  var key = leafletMap.getBounds().toBBoxString() + "|" + state.types.join(",") + "|"
+    + (state.position ? state.position.lat + "," + state.position.lon : "-") + "|"
+    + state.mine.length + "|" + BUNDLED.length;
+  if (key === lastDraw) return;
+  lastDraw = key;
+
   markerLayer.clearLayers();
 
   var view = pointsInView();
@@ -1710,7 +1796,142 @@ function fuelResult(f) {
 }
 
 /* ============================================================
+   6d. WEATHER
+
+   The one thing in the app that asks the internet for something while you
+   use it. It comes from Open-Meteo, which is free, needs no account or key,
+   and for Australia draws on the Bureau's own ACCESS model.
+
+   Three rules keep it honest with the rest of the app:
+
+   It never blocks. The forecast arrives when it arrives; the map and list
+   don't wait for it.
+
+   It is remembered. Whatever came back last is kept on the phone, so with no
+   signal you still see the last forecast — marked with how old it is, so you
+   can judge whether to trust it.
+
+   It is not chatty. A forecast is reused for an hour, or until you have moved
+   more than ten kilometres, and only three decimals of your position are
+   sent — about a hundred metres — which is all a forecast needs.
+   ============================================================ */
+
+var WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
+var WEATHER_MAX_AGE_MS = 60 * 60 * 1000;   // reuse for an hour
+var WEATHER_MAX_DRIFT_KM = 10;             // ...or until you've moved this far
+
+function weatherFor(pos) {
+  var have = state.weather;
+  var stillGood = have && have.data
+    && (Date.now() - have.at) < WEATHER_MAX_AGE_MS
+    && distanceKm(have.lat, have.lon, pos.lat, pos.lon) < WEATHER_MAX_DRIFT_KM;
+  if (stillGood || state.weatherBusy) return;
+
+  state.weatherBusy = true;
+  state.weatherTried = true;
+
+  var url = WEATHER_URL
+    + "?latitude=" + pos.lat.toFixed(3) + "&longitude=" + pos.lon.toFixed(3)
+    + "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m"
+    + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max"
+    + "&wind_speed_unit=kmh&timezone=auto&forecast_days=4";
+
+  fetch(url)
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(r.status)); })
+    .then(function (data) {
+      if (!data || !data.current || !data.daily) throw new Error("odd reply");
+      state.weather = { at: Date.now(), lat: pos.lat, lon: pos.lon, data: data };
+      remember(WEATHER_KEY, state.weather);
+    })
+    .catch(function () { /* keep whatever we already had, stale or not */ })
+    .then(function () {
+      state.weatherBusy = false;
+      render();
+    });
+}
+
+/* Open-Meteo reports conditions as a WMO code number. This turns the ones
+   that matter here into words and a picture. */
+function weatherWords(code) {
+  var table = {
+    0: ["Clear", "☀️"], 1: ["Mostly clear", "🌤️"], 2: ["Partly cloudy", "⛅"], 3: ["Overcast", "☁️"],
+    45: ["Fog", "🌫️"], 48: ["Fog", "🌫️"],
+    51: ["Light drizzle", "🌦️"], 53: ["Drizzle", "🌦️"], 55: ["Heavy drizzle", "🌧️"],
+    56: ["Freezing drizzle", "🌧️"], 57: ["Freezing drizzle", "🌧️"],
+    61: ["Light rain", "🌧️"], 63: ["Rain", "🌧️"], 65: ["Heavy rain", "🌧️"],
+    66: ["Freezing rain", "🌧️"], 67: ["Freezing rain", "🌧️"],
+    71: ["Light snow", "🌨️"], 73: ["Snow", "🌨️"], 75: ["Heavy snow", "🌨️"], 77: ["Snow grains", "🌨️"],
+    80: ["Showers", "🌦️"], 81: ["Showers", "🌦️"], 82: ["Heavy showers", "🌧️"],
+    85: ["Snow showers", "🌨️"], 86: ["Snow showers", "🌨️"],
+    95: ["Thunderstorm", "⛈️"], 96: ["Thunderstorm, hail", "⛈️"], 99: ["Thunderstorm, hail", "⛈️"]
+  };
+  return table[code] || ["—", "🌡️"];
+}
+
+function clockTime(ms) {
+  return new Date(ms).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
+}
+
+function dayName(isoDate, index) {
+  if (index === 0) return "Today";
+  if (index === 1) return "Tomorrow";
+  // "T00:00" pins the date to local midnight; without it some browsers read
+  // a bare date as UTC and the day comes out wrong east of Greenwich.
+  return new Date(isoDate + "T00:00").toLocaleDateString("en-AU", { weekday: "long" });
+}
+
+function weatherBlock() {
+  var w = state.weather;
+  if (!w || !w.data) {
+    if (state.weatherBusy) return '<div class="wx-none">Fetching the weather…</div>';
+    if (state.weatherTried) return '<div class="wx-none">Weather needs signal — nothing stored yet.</div>';
+    return "";
+  }
+
+  var cur = w.data.current;
+  var words = weatherWords(cur.weather_code);
+  var ageMs = Date.now() - w.at;
+  var stale = ageMs > WEATHER_MAX_AGE_MS;
+  var wind = Math.round(cur.wind_speed_10m) + " km/h " + compassLabel(cur.wind_direction_10m);
+
+  var html = '<button class="wxbar" id="toggleWeather" aria-expanded="' + state.weatherOpen + '" '
+    + 'aria-controls="wxDays" aria-label="Weather: ' + escapeHtml(words[0]) + ', '
+    + Math.round(cur.temperature_2m) + ' degrees, wind ' + escapeHtml(wind) + '. Tap for the forecast.">'
+    + '<span class="wx-ico" aria-hidden="true">' + words[1] + '</span>'
+    + '<span class="wx-temp num">' + Math.round(cur.temperature_2m) + '<small>°</small></span>'
+    + '<span class="wx-main"><b>' + escapeHtml(words[0]) + '</b>'
+    + 'Wind ' + escapeHtml(wind)
+    + (stale ? ' <span class="wx-stale">· from ' + clockTime(w.at) + '</span>' : '')
+    + '</span>'
+    + '<span class="chev" aria-hidden="true">▾</span>'
+    + '</button>';
+
+  if (state.weatherOpen) {
+    var d = w.data.daily;
+    html += '<div class="wx-days" id="wxDays">';
+    for (var i = 0; i < d.time.length; i++) {
+      var dw = weatherWords(d.weather_code[i]);
+      var rain = d.precipitation_sum[i];
+      var chance = d.precipitation_probability_max ? d.precipitation_probability_max[i] : null;
+      html += '<div class="wx-day">'
+        + '<span class="d">' + dayName(d.time[i], i) + '</span>'
+        + '<span class="i" aria-hidden="true">' + dw[1] + '</span>'
+        + '<span class="w">' + escapeHtml(dw[0])
+        + (rain > 0 || chance > 20 ? ' · ' + (rain > 0 ? rain.toFixed(1) + ' mm' : '') + (chance !== null ? ' (' + chance + '%)' : '') : '')
+        + ' · wind to ' + Math.round(d.wind_speed_10m_max[i]) + '</span>'
+        + '<span class="t num">' + Math.round(d.temperature_2m_max[i]) + '° <small>' + Math.round(d.temperature_2m_min[i]) + '°</small></span>'
+        + '</div>';
+    }
+    html += '<div class="wx-foot">' + (stale ? 'No signal — forecast from ' : 'Forecast fetched at ')
+      + clockTime(w.at) + ' · Open-Meteo · winds in km/h</div>';
+    html += '</div>';
+  }
+  return html;
+}
+
+/* ============================================================
    7. EXPORT AND IMPORT
+
 
 
    Export builds a file in memory and hands it either to the iOS
@@ -1848,6 +2069,12 @@ function wireUp() {
     };
   });
 
+  var toggleWeather = app.querySelector("#toggleWeather");
+  if (toggleWeather) toggleWeather.onclick = function () {
+    state.weatherOpen = !state.weatherOpen;
+    render();
+  };
+
   var recentre = app.querySelector("#recentre");
   if (recentre) recentre.onclick = function () {
     frameView(nearbyPoints());
@@ -1899,6 +2126,7 @@ function wireUp() {
       state.manualError = null;
       state.position = parsed;
       state.locationError = null;
+      weatherFor(parsed);
     }
     render();
   };
@@ -2081,6 +2309,9 @@ function registerServiceWorker() {
 
 state.mine = loadMine();
 state.types = loadTypes(state.types);
+// The last forecast comes straight back, so a no-signal open still shows one.
+var savedWx = remembered(WEATHER_KEY, null);
+if (savedWx && savedWx.data && typeof savedWx.at === "number") state.weather = savedWx;
 state.basemap = BASEMAPS[remembered(BASEMAP_KEY, "map")] ? remembered(BASEMAP_KEY, "map") : "map";
 var savedFuel = remembered(FUEL_KEY, null);
 if (savedFuel && typeof savedFuel === "object") {
